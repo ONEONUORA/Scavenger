@@ -73,6 +73,19 @@ impl ScavengerContract {
         next_id
     }
 
+    /// Get the total count of incentive records
+    fn get_incentive_count(env: &Env) -> u64 {
+        env.storage().instance().get(&("incentive_count",)).unwrap_or(0)
+    }
+
+    /// Increment and return the next incentive ID
+    fn next_incentive_id(env: &Env) -> u64 {
+        let count = Self::get_incentive_count(env);
+        let next_id = count + 1;
+        env.storage().instance().set(&("incentive_count",), &next_id);
+        next_id
+    }
+
     /// Get participant information
     pub fn get_participant(env: Env, address: Address) -> Option<Participant> {
         let key = (address,);
@@ -820,5 +833,326 @@ mod test {
         let retrieved = client.get_waste_by_id(&material.id);
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().id, material.id);
+    }
+
+    // Counter Storage System Tests
+    #[test]
+    fn test_waste_id_counter_initialization() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let desc = String::from_str(&env, "First submission");
+        
+        // First submission should get ID 1
+        let material = client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+        assert_eq!(material.id, 1);
+    }
+
+    #[test]
+    fn test_waste_id_counter_increments_correctly() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let desc = String::from_str(&env, "Test");
+
+        // Submit multiple materials and verify sequential IDs
+        let m1 = client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+        let m2 = client.submit_material(&WasteType::Plastic, &2000, &user, &desc);
+        let m3 = client.submit_material(&WasteType::Metal, &3000, &user, &desc);
+        let m4 = client.submit_material(&WasteType::Glass, &4000, &user, &desc);
+        let m5 = client.submit_material(&WasteType::PetPlastic, &5000, &user, &desc);
+
+        assert_eq!(m1.id, 1);
+        assert_eq!(m2.id, 2);
+        assert_eq!(m3.id, 3);
+        assert_eq!(m4.id, 4);
+        assert_eq!(m5.id, 5);
+    }
+
+    #[test]
+    fn test_waste_id_no_reuse() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let desc = String::from_str(&env, "Test");
+
+        // Submit materials
+        let m1 = client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+        let m2 = client.submit_material(&WasteType::Plastic, &2000, &user, &desc);
+        
+        // Even after retrieving, new submissions should get new IDs
+        let _retrieved = client.get_material(&m1.id);
+        let m3 = client.submit_material(&WasteType::Metal, &3000, &user, &desc);
+        
+        assert_eq!(m1.id, 1);
+        assert_eq!(m2.id, 2);
+        assert_eq!(m3.id, 3);
+        
+        // Verify no ID collision
+        assert_ne!(m1.id, m2.id);
+        assert_ne!(m2.id, m3.id);
+        assert_ne!(m1.id, m3.id);
+    }
+
+    #[test]
+    fn test_waste_id_counter_thread_safe_operations() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user1 = Address::generate(&env);
+        let user2 = Address::generate(&env);
+        let user3 = Address::generate(&env);
+        env.mock_all_auths();
+
+        let desc = String::from_str(&env, "Concurrent test");
+
+        // Simulate concurrent submissions from different users
+        let m1 = client.submit_material(&WasteType::Paper, &1000, &user1, &desc);
+        let m2 = client.submit_material(&WasteType::Plastic, &2000, &user2, &desc);
+        let m3 = client.submit_material(&WasteType::Metal, &3000, &user3, &desc);
+        let m4 = client.submit_material(&WasteType::Glass, &4000, &user1, &desc);
+
+        // All IDs should be unique and sequential
+        assert_eq!(m1.id, 1);
+        assert_eq!(m2.id, 2);
+        assert_eq!(m3.id, 3);
+        assert_eq!(m4.id, 4);
+    }
+
+    #[test]
+    fn test_waste_id_counter_with_batch_operations() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Submit single material first
+        let desc = String::from_str(&env, "Single");
+        let m1 = client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+        assert_eq!(m1.id, 1);
+
+        // Submit batch
+        let mut materials = soroban_sdk::Vec::new(&env);
+        materials.push_back((
+            WasteType::Plastic,
+            2000u64,
+            String::from_str(&env, "Batch 1"),
+        ));
+        materials.push_back((
+            WasteType::Metal,
+            3000u64,
+            String::from_str(&env, "Batch 2"),
+        ));
+
+        let batch_results = client.submit_materials_batch(&materials, &user);
+        
+        // Batch should continue from where single left off
+        assert_eq!(batch_results.get(0).unwrap().id, 2);
+        assert_eq!(batch_results.get(1).unwrap().id, 3);
+
+        // Submit another single material
+        let m4 = client.submit_material(&WasteType::Glass, &4000, &user, &desc);
+        assert_eq!(m4.id, 4);
+    }
+
+    #[test]
+    fn test_waste_id_counter_persistence() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let desc = String::from_str(&env, "Persistence test");
+
+        // Submit materials
+        client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+        client.submit_material(&WasteType::Plastic, &2000, &user, &desc);
+
+        // Verify materials exist
+        assert!(client.waste_exists(&1));
+        assert!(client.waste_exists(&2));
+
+        // Submit more materials - counter should persist
+        let m3 = client.submit_material(&WasteType::Metal, &3000, &user, &desc);
+        assert_eq!(m3.id, 3);
+    }
+
+    #[test]
+    fn test_incentive_id_counter_initialization() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        
+        // Test that incentive counter starts at 0
+        let count = env.as_contract(&contract_id, || {
+            ScavengerContract::get_incentive_count(&env)
+        });
+        assert_eq!(count, 0);
+        
+        // Test first increment
+        let id1 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        assert_eq!(id1, 1);
+        
+        // Test second increment
+        let id2 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        assert_eq!(id2, 2);
+    }
+
+    #[test]
+    fn test_incentive_id_counter_increments_correctly() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        
+        // Generate multiple IDs
+        let id1 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        let id2 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        let id3 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        let id4 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        let id5 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        
+        // Verify sequential increments
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(id3, 3);
+        assert_eq!(id4, 4);
+        assert_eq!(id5, 5);
+    }
+
+    #[test]
+    fn test_incentive_id_no_reuse() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        
+        // Generate IDs
+        let id1 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        let id2 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        let id3 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        
+        // Verify all IDs are unique
+        assert_ne!(id1, id2);
+        assert_ne!(id2, id3);
+        assert_ne!(id1, id3);
+        
+        // Verify they are sequential (no gaps)
+        assert_eq!(id2, id1 + 1);
+        assert_eq!(id3, id2 + 1);
+    }
+
+    #[test]
+    fn test_incentive_id_counter_persistence() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        
+        // Generate some IDs
+        env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env);
+            ScavengerContract::next_incentive_id(&env);
+        });
+        
+        // Check count persists
+        let count = env.as_contract(&contract_id, || {
+            ScavengerContract::get_incentive_count(&env)
+        });
+        assert_eq!(count, 2);
+        
+        // Generate more IDs
+        let id3 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        assert_eq!(id3, 3);
+        
+        // Verify count updated
+        let count = env.as_contract(&contract_id, || {
+            ScavengerContract::get_incentive_count(&env)
+        });
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_waste_and_incentive_counters_independent() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let desc = String::from_str(&env, "Independence test");
+
+        // Generate waste IDs
+        let m1 = client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+        let m2 = client.submit_material(&WasteType::Plastic, &2000, &user, &desc);
+        
+        // Generate incentive IDs
+        let i1 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        let i2 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        
+        // Generate more waste IDs
+        let m3 = client.submit_material(&WasteType::Metal, &3000, &user, &desc);
+        
+        // Generate more incentive IDs
+        let i3 = env.as_contract(&contract_id, || {
+            ScavengerContract::next_incentive_id(&env)
+        });
+        
+        // Verify waste IDs are sequential
+        assert_eq!(m1.id, 1);
+        assert_eq!(m2.id, 2);
+        assert_eq!(m3.id, 3);
+        
+        // Verify incentive IDs are sequential
+        assert_eq!(i1, 1);
+        assert_eq!(i2, 2);
+        assert_eq!(i3, 3);
+        
+        // Verify counters are independent
+        let waste_count = env.as_contract(&contract_id, || {
+            ScavengerContract::get_waste_count(&env)
+        });
+        let incentive_count = env.as_contract(&contract_id, || {
+            ScavengerContract::get_incentive_count(&env)
+        });
+        assert_eq!(waste_count, 3);
+        assert_eq!(incentive_count, 3);
     }
 }
