@@ -2,7 +2,7 @@
 
 mod types;
 
-pub use types::{Material, ParticipantRole, WasteType};
+pub use types::{Material, ParticipantRole, RecyclingStats, WasteType};
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
 
@@ -111,6 +111,16 @@ impl ScavengerContract {
         env.storage().instance().set(&("material", material_id), &material);
         env.storage().instance().set(&("material_count",), &material_id);
 
+        // Update stats
+        let mut stats: RecyclingStats = env
+            .storage()
+            .instance()
+            .get(&("stats", submitter.clone()))
+            .unwrap_or_else(|| RecyclingStats::new(submitter.clone()));
+        
+        stats.record_submission(&material);
+        env.storage().instance().set(&("stats", submitter), &stats);
+
         material
     }
 
@@ -145,7 +155,22 @@ impl ScavengerContract {
         material.verify();
         env.storage().instance().set(&("material", material_id), &material);
 
+        // Update submitter stats
+        let mut stats: RecyclingStats = env
+            .storage()
+            .instance()
+            .get(&("stats", material.submitter.clone()))
+            .unwrap_or_else(|| RecyclingStats::new(material.submitter.clone()));
+        
+        stats.record_verification(&material);
+        env.storage().instance().set(&("stats", material.submitter.clone()), &stats);
+
         material
+    }
+
+    /// Get recycling statistics for a participant
+    pub fn get_stats(env: Env, participant: Address) -> Option<RecyclingStats> {
+        env.storage().instance().get(&("stats", participant))
     }
 }
 
@@ -393,5 +418,74 @@ mod test {
         assert!(client.get_material(&2).is_some());
         assert!(client.get_material(&3).is_some());
         assert!(client.get_material(&4).is_none());
+    }
+
+    #[test]
+    fn test_stats_tracking() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Submit materials
+        let desc = String::from_str(&env, "Test");
+        client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+        client.submit_material(&WasteType::Plastic, &2000, &user, &desc);
+
+        // Check stats
+        let stats = client.get_stats(&user);
+        assert!(stats.is_some());
+        let stats = stats.unwrap();
+        assert_eq!(stats.total_submissions, 2);
+        assert_eq!(stats.total_weight, 3000);
+    }
+
+    #[test]
+    fn test_stats_with_verification() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let submitter = Address::generate(&env);
+        let recycler = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Register recycler
+        client.register_participant(&recycler, &ParticipantRole::Recycler);
+
+        // Submit and verify material
+        let desc = String::from_str(&env, "Metal cans");
+        client.submit_material(&WasteType::Metal, &5000, &submitter, &desc);
+        client.verify_material(&1, &recycler);
+
+        // Check stats
+        let stats = client.get_stats(&submitter).unwrap();
+        assert_eq!(stats.total_submissions, 1);
+        assert_eq!(stats.verified_submissions, 1);
+        assert_eq!(stats.total_points, 250); // 5kg * 5 * 10
+        assert_eq!(stats.verification_rate(), 100);
+    }
+
+    #[test]
+    fn test_stats_most_submitted_type() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let desc = String::from_str(&env, "Test");
+        
+        // Submit multiple plastic items
+        client.submit_material(&WasteType::Plastic, &1000, &user, &desc);
+        client.submit_material(&WasteType::Plastic, &2000, &user, &desc);
+        client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+
+        let stats = client.get_stats(&user).unwrap();
+        assert_eq!(stats.plastic_count, 2);
+        assert_eq!(stats.paper_count, 1);
     }
 }

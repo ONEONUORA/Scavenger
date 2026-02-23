@@ -199,6 +199,240 @@ impl Material {
     }
 }
 
+/// Tracks recycling statistics for a participant
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecyclingStats {
+    /// Participant address
+    pub participant: Address,
+    /// Total number of materials submitted
+    pub total_submissions: u64,
+    /// Total number of verified materials
+    pub verified_submissions: u64,
+    /// Total weight of all materials in grams
+    pub total_weight: u64,
+    /// Total reward points earned
+    pub total_points: u64,
+    /// Number of materials by waste type
+    pub paper_count: u64,
+    pub pet_plastic_count: u64,
+    pub plastic_count: u64,
+    pub metal_count: u64,
+    pub glass_count: u64,
+}
+
+impl RecyclingStats {
+    /// Creates a new RecyclingStats instance
+    pub fn new(participant: Address) -> Self {
+        Self {
+            participant,
+            total_submissions: 0,
+            verified_submissions: 0,
+            total_weight: 0,
+            total_points: 0,
+            paper_count: 0,
+            pet_plastic_count: 0,
+            plastic_count: 0,
+            metal_count: 0,
+            glass_count: 0,
+        }
+    }
+
+    /// Records a new material submission
+    pub fn record_submission(&mut self, material: &Material) {
+        self.total_submissions += 1;
+        self.total_weight += material.weight;
+        
+        // Update waste type count
+        match material.waste_type {
+            WasteType::Paper => self.paper_count += 1,
+            WasteType::PetPlastic => self.pet_plastic_count += 1,
+            WasteType::Plastic => self.plastic_count += 1,
+            WasteType::Metal => self.metal_count += 1,
+            WasteType::Glass => self.glass_count += 1,
+        }
+    }
+
+    /// Records a material verification
+    pub fn record_verification(&mut self, material: &Material) {
+        if material.verified {
+            self.verified_submissions += 1;
+            self.total_points += material.calculate_reward_points();
+        }
+    }
+
+    /// Calculates the verification rate (percentage)
+    pub fn verification_rate(&self) -> u64 {
+        if self.total_submissions == 0 {
+            0
+        } else {
+            (self.verified_submissions * 100) / self.total_submissions
+        }
+    }
+
+    /// Gets the most submitted waste type
+    pub fn most_submitted_type(&self) -> Option<WasteType> {
+        let counts = [
+            (WasteType::Paper, self.paper_count),
+            (WasteType::PetPlastic, self.pet_plastic_count),
+            (WasteType::Plastic, self.plastic_count),
+            (WasteType::Metal, self.metal_count),
+            (WasteType::Glass, self.glass_count),
+        ];
+
+        counts
+            .iter()
+            .max_by_key(|(_, count)| count)
+            .filter(|(_, count)| *count > 0)
+            .map(|(waste_type, _)| *waste_type)
+    }
+
+    /// Calculates average weight per submission
+    pub fn average_weight(&self) -> u64 {
+        if self.total_submissions == 0 {
+            0
+        } else {
+            self.total_weight / self.total_submissions
+        }
+    }
+
+    /// Checks if participant is an active recycler (10+ submissions)
+    pub fn is_active_recycler(&self) -> bool {
+        self.total_submissions >= 10
+    }
+
+    /// Checks if participant is a verified contributor (80%+ verification rate)
+    pub fn is_verified_contributor(&self) -> bool {
+        self.verification_rate() >= 80
+    }
+}
+
+#[cfg(test)]
+mod recycling_stats_tests {
+    use super::*;
+
+    #[test]
+    fn test_new_stats() {
+        let env = soroban_sdk::Env::default();
+        let participant = Address::generate(&env);
+        
+        let stats = RecyclingStats::new(participant.clone());
+        
+        assert_eq!(stats.participant, participant);
+        assert_eq!(stats.total_submissions, 0);
+        assert_eq!(stats.verified_submissions, 0);
+        assert_eq!(stats.total_weight, 0);
+        assert_eq!(stats.total_points, 0);
+    }
+
+    #[test]
+    fn test_record_submission() {
+        let env = soroban_sdk::Env::default();
+        let participant = Address::generate(&env);
+        let description = String::from_str(&env, "Test");
+        
+        let mut stats = RecyclingStats::new(participant.clone());
+        let material = Material::new(1, WasteType::Paper, 5000, participant, 0, description);
+        
+        stats.record_submission(&material);
+        
+        assert_eq!(stats.total_submissions, 1);
+        assert_eq!(stats.total_weight, 5000);
+        assert_eq!(stats.paper_count, 1);
+    }
+
+    #[test]
+    fn test_record_verification() {
+        let env = soroban_sdk::Env::default();
+        let participant = Address::generate(&env);
+        let description = String::from_str(&env, "Test");
+        
+        let mut stats = RecyclingStats::new(participant.clone());
+        let mut material = Material::new(1, WasteType::Metal, 5000, participant, 0, description);
+        
+        material.verify();
+        stats.record_verification(&material);
+        
+        assert_eq!(stats.verified_submissions, 1);
+        assert_eq!(stats.total_points, 250); // 5kg * 5 * 10
+    }
+
+    #[test]
+    fn test_verification_rate() {
+        let env = soroban_sdk::Env::default();
+        let participant = Address::generate(&env);
+        
+        let mut stats = RecyclingStats::new(participant);
+        stats.total_submissions = 10;
+        stats.verified_submissions = 8;
+        
+        assert_eq!(stats.verification_rate(), 80);
+    }
+
+    #[test]
+    fn test_most_submitted_type() {
+        let env = soroban_sdk::Env::default();
+        let participant = Address::generate(&env);
+        
+        let mut stats = RecyclingStats::new(participant);
+        stats.paper_count = 5;
+        stats.plastic_count = 10;
+        stats.metal_count = 3;
+        
+        assert_eq!(stats.most_submitted_type(), Some(WasteType::Plastic));
+    }
+
+    #[test]
+    fn test_average_weight() {
+        let env = soroban_sdk::Env::default();
+        let participant = Address::generate(&env);
+        
+        let mut stats = RecyclingStats::new(participant);
+        stats.total_submissions = 5;
+        stats.total_weight = 10000;
+        
+        assert_eq!(stats.average_weight(), 2000);
+    }
+
+    #[test]
+    fn test_is_active_recycler() {
+        let env = soroban_sdk::Env::default();
+        let participant = Address::generate(&env);
+        
+        let mut stats = RecyclingStats::new(participant);
+        assert!(!stats.is_active_recycler());
+        
+        stats.total_submissions = 10;
+        assert!(stats.is_active_recycler());
+    }
+
+    #[test]
+    fn test_is_verified_contributor() {
+        let env = soroban_sdk::Env::default();
+        let participant = Address::generate(&env);
+        
+        let mut stats = RecyclingStats::new(participant);
+        stats.total_submissions = 10;
+        stats.verified_submissions = 8;
+        
+        assert!(stats.is_verified_contributor());
+    }
+
+    #[test]
+    fn test_stats_storage() {
+        let env = soroban_sdk::Env::default();
+        let participant = Address::generate(&env);
+        
+        let stats = RecyclingStats::new(participant.clone());
+        
+        // Test storage compatibility
+        env.storage().instance().set(&("stats", participant.clone()), &stats);
+        let retrieved: RecyclingStats = env.storage().instance().get(&("stats", participant)).unwrap();
+        
+        assert_eq!(retrieved.total_submissions, 0);
+    }
+}
+
 #[cfg(test)]
 mod material_tests {
     use super::*;
