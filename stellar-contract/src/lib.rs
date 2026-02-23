@@ -2,7 +2,7 @@
 
 mod types;
 
-pub use types::ParticipantRole;
+pub use types::{ParticipantRole, WasteType};
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map};
 
@@ -195,5 +195,50 @@ mod test {
         assert_eq!(p1.role, ParticipantRole::Recycler);
         assert_eq!(p2.role, ParticipantRole::Collector);
         assert_eq!(p3.role, ParticipantRole::Manufacturer);
+    }
+
+    #[test]
+    fn test_waste_type_storage() {
+        let env = Env::default();
+        
+        // Test that WasteType can be stored and retrieved from storage
+        let waste_types = [
+            WasteType::Paper,
+            WasteType::PetPlastic,
+            WasteType::Plastic,
+            WasteType::Metal,
+            WasteType::Glass,
+        ];
+
+        for (i, waste_type) in waste_types.iter().enumerate() {
+            let key = (i as u32,);
+            env.storage().instance().set(&key, waste_type);
+            let retrieved: WasteType = env.storage().instance().get(&key).unwrap();
+            assert_eq!(retrieved, *waste_type);
+        }
+    }
+
+    #[test]
+    fn test_waste_type_serialization() {
+        let env = Env::default();
+        
+        // Test all waste types can be serialized/deserialized
+        let all_types = [
+            WasteType::Paper,
+            WasteType::PetPlastic,
+            WasteType::Plastic,
+            WasteType::Metal,
+            WasteType::Glass,
+        ];
+
+        for waste_type in all_types.iter() {
+            // Store in instance storage
+            env.storage().instance().set(&("waste",), waste_type);
+            let retrieved: WasteType = env.storage().instance().get(&("waste",)).unwrap();
+            assert_eq!(retrieved, *waste_type);
+            
+            // Verify string representation
+            assert!(!waste_type.as_str().is_empty());
+        }
     }
 }

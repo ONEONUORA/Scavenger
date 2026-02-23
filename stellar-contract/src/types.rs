@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Env};
+use soroban_sdk::contracttype;
 
 /// Represents the role of a participant in the Scavenger ecosystem
 #[contracttype]
@@ -56,6 +56,199 @@ impl ParticipantRole {
     /// Validates if a participant can process recyclables
     pub fn can_process_recyclables(&self) -> bool {
         matches!(self, ParticipantRole::Recycler)
+    }
+}
+
+/// Represents the type of waste material in the recycling ecosystem
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WasteType {
+    /// Paper waste - newspapers, cardboard, office paper
+    Paper = 0,
+    /// PET plastic - polyethylene terephthalate bottles and containers
+    PetPlastic = 1,
+    /// General plastic waste - various plastic types
+    Plastic = 2,
+    /// Metal waste - aluminum, steel, copper
+    Metal = 3,
+    /// Glass waste - bottles, jars, containers
+    Glass = 4,
+}
+
+impl WasteType {
+    /// Validates if the value is a valid WasteType variant
+    pub fn is_valid(value: u32) -> bool {
+        matches!(value, 0 | 1 | 2 | 3 | 4)
+    }
+
+    /// Converts a u32 to a WasteType
+    /// Returns None if the value is invalid
+    pub fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(WasteType::Paper),
+            1 => Some(WasteType::PetPlastic),
+            2 => Some(WasteType::Plastic),
+            3 => Some(WasteType::Metal),
+            4 => Some(WasteType::Glass),
+            _ => None,
+        }
+    }
+
+    /// Converts the WasteType to u32
+    pub fn to_u32(&self) -> u32 {
+        *self as u32
+    }
+
+    /// Returns the string representation of the waste type
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WasteType::Paper => "PAPER",
+            WasteType::PetPlastic => "PETPLASTIC",
+            WasteType::Plastic => "PLASTIC",
+            WasteType::Metal => "METAL",
+            WasteType::Glass => "GLASS",
+        }
+    }
+
+    /// Checks if the waste type is recyclable plastic
+    pub fn is_plastic(&self) -> bool {
+        matches!(self, WasteType::PetPlastic | WasteType::Plastic)
+    }
+
+    /// Checks if the waste type is biodegradable
+    pub fn is_biodegradable(&self) -> bool {
+        matches!(self, WasteType::Paper)
+    }
+
+    /// Checks if the waste type is infinitely recyclable
+    pub fn is_infinitely_recyclable(&self) -> bool {
+        matches!(self, WasteType::Metal | WasteType::Glass)
+    }
+}
+
+impl core::fmt::Display for WasteType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod waste_type_tests {
+    use super::*;
+
+    #[test]
+    fn test_waste_type_values() {
+        assert_eq!(WasteType::Paper as u32, 0);
+        assert_eq!(WasteType::PetPlastic as u32, 1);
+        assert_eq!(WasteType::Plastic as u32, 2);
+        assert_eq!(WasteType::Metal as u32, 3);
+        assert_eq!(WasteType::Glass as u32, 4);
+    }
+
+    #[test]
+    fn test_waste_type_is_valid() {
+        assert!(WasteType::is_valid(0));
+        assert!(WasteType::is_valid(1));
+        assert!(WasteType::is_valid(2));
+        assert!(WasteType::is_valid(3));
+        assert!(WasteType::is_valid(4));
+        assert!(!WasteType::is_valid(5));
+        assert!(!WasteType::is_valid(999));
+    }
+
+    #[test]
+    fn test_waste_type_from_u32() {
+        assert_eq!(WasteType::from_u32(0), Some(WasteType::Paper));
+        assert_eq!(WasteType::from_u32(1), Some(WasteType::PetPlastic));
+        assert_eq!(WasteType::from_u32(2), Some(WasteType::Plastic));
+        assert_eq!(WasteType::from_u32(3), Some(WasteType::Metal));
+        assert_eq!(WasteType::from_u32(4), Some(WasteType::Glass));
+        assert_eq!(WasteType::from_u32(5), None);
+        assert_eq!(WasteType::from_u32(999), None);
+    }
+
+    #[test]
+    fn test_waste_type_to_u32() {
+        assert_eq!(WasteType::Paper.to_u32(), 0);
+        assert_eq!(WasteType::PetPlastic.to_u32(), 1);
+        assert_eq!(WasteType::Plastic.to_u32(), 2);
+        assert_eq!(WasteType::Metal.to_u32(), 3);
+        assert_eq!(WasteType::Glass.to_u32(), 4);
+    }
+
+    #[test]
+    fn test_waste_type_as_str() {
+        assert_eq!(WasteType::Paper.as_str(), "PAPER");
+        assert_eq!(WasteType::PetPlastic.as_str(), "PETPLASTIC");
+        assert_eq!(WasteType::Plastic.as_str(), "PLASTIC");
+        assert_eq!(WasteType::Metal.as_str(), "METAL");
+        assert_eq!(WasteType::Glass.as_str(), "GLASS");
+    }
+
+    #[test]
+    fn test_waste_type_display() {
+        assert_eq!(format!("{}", WasteType::Paper), "PAPER");
+        assert_eq!(format!("{}", WasteType::PetPlastic), "PETPLASTIC");
+        assert_eq!(format!("{}", WasteType::Plastic), "PLASTIC");
+        assert_eq!(format!("{}", WasteType::Metal), "METAL");
+        assert_eq!(format!("{}", WasteType::Glass), "GLASS");
+    }
+
+    #[test]
+    fn test_waste_type_is_plastic() {
+        assert!(!WasteType::Paper.is_plastic());
+        assert!(WasteType::PetPlastic.is_plastic());
+        assert!(WasteType::Plastic.is_plastic());
+        assert!(!WasteType::Metal.is_plastic());
+        assert!(!WasteType::Glass.is_plastic());
+    }
+
+    #[test]
+    fn test_waste_type_is_biodegradable() {
+        assert!(WasteType::Paper.is_biodegradable());
+        assert!(!WasteType::PetPlastic.is_biodegradable());
+        assert!(!WasteType::Plastic.is_biodegradable());
+        assert!(!WasteType::Metal.is_biodegradable());
+        assert!(!WasteType::Glass.is_biodegradable());
+    }
+
+    #[test]
+    fn test_waste_type_is_infinitely_recyclable() {
+        assert!(!WasteType::Paper.is_infinitely_recyclable());
+        assert!(!WasteType::PetPlastic.is_infinitely_recyclable());
+        assert!(!WasteType::Plastic.is_infinitely_recyclable());
+        assert!(WasteType::Metal.is_infinitely_recyclable());
+        assert!(WasteType::Glass.is_infinitely_recyclable());
+    }
+
+    #[test]
+    fn test_waste_type_clone_and_copy() {
+        let waste1 = WasteType::Paper;
+        let waste2 = waste1;
+        assert_eq!(waste1, waste2);
+    }
+
+    #[test]
+    fn test_waste_type_equality() {
+        assert_eq!(WasteType::Paper, WasteType::Paper);
+        assert_ne!(WasteType::Paper, WasteType::Plastic);
+        assert_ne!(WasteType::Metal, WasteType::Glass);
+    }
+
+    #[test]
+    fn test_all_waste_types() {
+        let types = [
+            WasteType::Paper,
+            WasteType::PetPlastic,
+            WasteType::Plastic,
+            WasteType::Metal,
+            WasteType::Glass,
+        ];
+        
+        for (i, waste_type) in types.iter().enumerate() {
+            assert_eq!(waste_type.to_u32(), i as u32);
+            assert_eq!(WasteType::from_u32(i as u32), Some(*waste_type));
+        }
     }
 }
 
