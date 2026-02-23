@@ -1,45 +1,39 @@
-# stellar/soroban/Rust output
-target
-.soroban
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
 
-# project identity and alias files will be in .config/stellar
-.config
+# Soroban
+.soroban/
+*.wasm
+*.optimized.wasm
 
-# test snapshot folders from sample contracts
-test_snapshots
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
 
-# build output
-dist
-dist-ssr
+# Environment
+.env
+.env.local
+.env.*.local
 
-# dependencies
+# Node (for frontend)
 node_modules/
-
-# logs
-logs
+dist/
+.cache/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-# environment variables
-.env
-.env.*
-!.env.example
+# Build artifacts
+build/
+out/
 
-# easy way to create temporary local-only files and folders
-*.local.*
-
-# macOS-specific files
-.DS_Store
-
-# generated contract clients
-packages/*
-# if you have other workspace packages, add them here
-!packages/.gitkeep
-
-# generated contract client imports
-src/contracts/*
-!src/contracts/util.ts
+# OS
+Thumbs.db

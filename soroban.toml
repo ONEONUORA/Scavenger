@@ -1,0 +1,21 @@
+# Soroban CLI Configuration
+
+[network.testnet]
+rpc-url = "https://soroban-testnet.stellar.org"
+network-passphrase = "Test SDF Network ; September 2015"
+
+[network.mainnet]
+rpc-url = "https://soroban-mainnet.stellar.org"
+network-passphrase = "Public Global Stellar Network ; September 2015"
+
+[network.standalone]
+rpc-url = "http://localhost:8000/soroban/rpc"
+network-passphrase = "Standalone Network ; February 2017"
+
+[network.futurenet]
+rpc-url = "https://rpc-futurenet.stellar.org"
+network-passphrase = "Test SDF Future Network ; October 2022"
+
+# Contract configuration
+[contracts.scavngr]
+path = "stellar-contract"

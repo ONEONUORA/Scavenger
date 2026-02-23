@@ -1,0 +1,19 @@
+[package]
+name = "stellar-scavngr-contract"
+version = "0.1.0"
+edition = "2021"
+authors = ["Scavngr Team"]
+description = "Stellar Soroban smart contract for the Scavngr recycling platform"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[features]
+testutils = ["soroban-sdk/testutils"]

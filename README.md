@@ -1,57 +1,148 @@
-# Scavenger
-Scavenger is a production-ready decentralized application (DApp) that harnesses the power of the Stellar blockchain network. Built with modern web technologies and integrated with Soroban smart contracts, this frontend application provides users with a seamless, secure, and intuitive interface for blockchain interactions.
+# Scavngr - Stellar Recycling Platform
 
-### What is StellarScavenger?
+A decentralized recycling platform built on Stellar blockchain using Soroban smart contracts. Scavngr connects recyclers, collectors, and manufacturers in a transparent and efficient ecosystem.
 
-StellarScavenger serves as a comprehensive gateway to the Stellar ecosystem, enabling users to:
+## Project Structure
 
-- **Interact with Soroban Smart Contracts**: Execute complex blockchain logic through user-friendly interfaces
-- **Manage Digital Assets**: Handle XLM and custom Stellar tokens with ease
-- **Execute Transactions**: Send, receive, and track blockchain transactions in real-time
-- **Connect Wallets**: Seamlessly integrate with popular Stellar wallets like Freighter
-- **Monitor Blockchain Activity**: View transaction history, account balances, and network status
+```
+Scavenger/
+├── stellar-contract/      # Soroban smart contract (Rust)
+│   ├── src/
+│   │   ├── lib.rs        # Main contract implementation
+│   │   └── types.rs      # ParticipantRole enum and types
+│   └── Cargo.toml
+├── frontend/             # React frontend (to be implemented)
+├── .github/workflows/    # CI/CD pipelines
+├── Cargo.toml           # Workspace configuration
+├── soroban.toml         # Soroban CLI configuration
+└── README.md
+```
 
-This DApp is designed for both newcomers to blockchain technology and experienced Stellar developers, offering an accessible entry point to decentralized finance (DeFi) and Web3 applications.
+## Features
 
----
+- **Role-Based Participant System**: Recycler, Collector, and Manufacturer roles
+- **Participant Registration**: On-chain participant management
+- **Role Validation**: Permission checks for different actions
+- **Soroban Storage**: Efficient on-chain data storage
 
-## 🚀 Why Stellar?
+## Prerequisites
 
-Stellar is a fast, scalable, and sustainable blockchain platform that offers significant advantages:
+- Rust 1.70+ with `wasm32-unknown-unknown` target
+- Soroban CLI
+- Stellar account with XLM (for deployment)
 
-### Performance & Cost
-- **Transaction Speed**: 3-5 second confirmation times
-- **Low Fees**: Transactions cost a fraction of a cent (0.00001 XLM base fee)
-- **High Throughput**: Capable of handling thousands of transactions per second
-- **Energy Efficient**: Minimal environmental impact compared to proof-of-work blockchains
+## Installation
 
-### Developer Experience
-- **Soroban Smart Contracts**: Rust-based smart contracts with WebAssembly execution
-- **Built-in DEX**: Native decentralized exchange functionality
-- **Asset Issuance**: Create custom tokens without smart contracts
-- **Stellar Consensus Protocol (SCP)**: Fast, secure, and decentralized consensus mechanism
+```bash
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-### Ecosystem
-- **Global Reach**: Used by financial institutions and payment providers worldwide
-- **Interoperability**: Seamless cross-border payments and asset transfers
-- **Regulatory Friendly**: Designed with compliance and financial regulations in mind
-- **Active Community**: Strong developer community and extensive documentation
+# Add WASM target
+rustup target add wasm32-unknown-unknown
 
----
+# Install Soroban CLI
+cargo install --locked soroban-cli --features opt
+```
 
-## ✨ Key Features
+## Build
 
-### 🔗 Blockchain Integration
+```bash
+# Build the contract
+cargo build --release
 
-#### Stellar Network Connectivity
-- **Multi-Network Support**: Switch between Mainnet, Testnet, and custom networks
-- **Horizon API Integration**: Real-time blockchain data access
-- **Soroban RPC**: Direct communication with smart contract runtime
-- **Network Status Monitoring**: Live network health and performance metrics
+# Build WASM
+cd stellar-contract
+cargo build --target wasm32-unknown-unknown --release
 
-#### Smart Contract Interaction
-- **Soroban Contract Calls**: Invoke smart contract functions with type-safe parameters
-- **Contract State Reading**: Query contract storage and state variables
-- **Transaction Simulation**: Preview transaction outcomes before execution
-- **Gas Estimation**: Accurate fee calculation for contract operations
-- **Event Monitoring**: Listen to and display contract-emitted events
+# Optimize WASM
+soroban contract optimize \
+  --wasm target/wasm32-unknown-unknown/release/stellar_scavngr_contract.wasm
+```
+
+## Testing
+
+```bash
+# Run all tests
+cargo test
+
+# Run tests with output
+cargo test -- --nocapture
+```
+
+## Deployment
+
+### Local (Standalone Network)
+
+```bash
+# Start Stellar standalone
+docker run --rm -it -p 8000:8000 \
+  stellar/quickstart:latest --standalone --enable-soroban-rpc
+
+# Deploy contract
+soroban contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/stellar_scavngr_contract.optimized.wasm \
+  --source <YOUR_SECRET_KEY> \
+  --network standalone
+```
+
+### Testnet
+
+```bash
+# Generate keypair
+soroban keys generate testnet-deployer
+
+# Fund account
+curl "https://friendbot.stellar.org?addr=$(soroban keys address testnet-deployer)"
+
+# Deploy
+soroban contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/stellar_scavngr_contract.optimized.wasm \
+  --source testnet-deployer \
+  --network testnet
+```
+
+## Contract API
+
+### ParticipantRole Enum
+
+```rust
+pub enum ParticipantRole {
+    Recycler = 0,      // Can collect and process recyclables
+    Collector = 1,     // Can collect materials
+    Manufacturer = 2,  // Can manufacture products
+}
+```
+
+### Functions
+
+- `register_participant(address, role)` - Register new participant
+- `get_participant(address)` - Get participant info
+- `update_role(address, new_role)` - Update participant role
+- `can_collect(address)` - Check collection permission
+- `can_manufacture(address)` - Check manufacturing permission
+
+## Development
+
+```bash
+# Format code
+cargo fmt
+
+# Run linter
+cargo clippy
+
+# Watch for changes
+cargo watch -x test
+```
+
+## CI/CD
+
+GitHub Actions automatically:
+- Runs tests on push/PR
+- Checks code formatting
+- Runs clippy linting
+- Builds optimized WASM
+- Uploads build artifacts
+
+## License
+
+MIT License - see LICENSE file for details

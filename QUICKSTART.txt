@@ -1,0 +1,40 @@
+SCAVNGR - QUICK START GUIDE
+===========================
+
+1. VERIFY SETUP
+   Windows: .\scripts\verify-setup.ps1
+   Linux/Mac: ./scripts/verify-setup.sh
+
+2. BUILD PROJECT
+   cargo build
+
+3. RUN TESTS
+   cargo test
+
+4. BUILD WASM
+   Windows: .\scripts\build-wasm.ps1
+   Linux/Mac: ./scripts/build-wasm.sh
+
+5. DEPLOY TO TESTNET
+   a. Generate keypair:
+      soroban keys generate testnet-deployer
+   
+   b. Fund account:
+      curl "https://friendbot.stellar.org?addr=$(soroban keys address testnet-deployer)"
+   
+   c. Deploy:
+      soroban contract deploy \
+        --wasm target/wasm32-unknown-unknown/release/stellar_scavngr_contract.optimized.wasm \
+        --source testnet-deployer \
+        --network testnet
+
+6. TEST CONTRACT
+   soroban contract invoke \
+     --id <CONTRACT_ID> \
+     --source testnet-deployer \
+     --network testnet \
+     -- register_participant \
+     --address $(soroban keys address testnet-deployer) \
+     --role '{"Recycler": {}}'
+
+For more details, see README.md

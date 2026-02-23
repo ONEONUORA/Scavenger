@@ -1,39 +1,20 @@
 [workspace]
-members = ["contracts/*"]
+members = ["stellar-contract"]
 resolver = "2"
 
-[workspace.package]
-authors = ["The Aha Company"]
-edition = "2024"
-license = "Apache-2.0"
-repository = "https://github.com/theahaco/scaffold-stellar"
-version = "0.0.1"
-
-[workspace.dependencies.soroban-sdk]
-version = "23.1.0"
-
-[workspace.dependencies.stellar-access]
-git = "https://github.com/OpenZeppelin/stellar-contracts"
-tag = "v0.5.1"
-
-[workspace.dependencies.stellar-macros]
-git = "https://github.com/OpenZeppelin/stellar-contracts"
-tag = "v0.5.1"
-
-[workspace.dependencies.stellar-tokens]
-git = "https://github.com/OpenZeppelin/stellar-contracts"
-tag = "v0.5.1"
+[workspace.dependencies]
+soroban-sdk = "21.7.0"
 
 [profile.release]
 opt-level = "z"
-debug = false
-lto = true
-debug-assertions = false
-codegen-units = 1
-panic = "abort"
 overflow-checks = true
-strip = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
 
 [profile.release-with-logs]
-debug-assertions = true
 inherits = "release"
+debug-assertions = true
