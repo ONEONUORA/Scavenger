@@ -1291,6 +1291,36 @@ impl ScavengerContract {
         active_incentives
     }
 
+    /// Get the active incentive with the highest reward for a specific manufacturer and waste type
+    /// Returns None if no active incentive is found
+    pub fn get_active_incentive_for_manufacturer(
+        env: Env,
+        manufacturer: Address,
+        waste_type: WasteType,
+    ) -> Option<Incentive> {
+        // Get all incentives for this manufacturer
+        let incentive_ids = Self::get_incentives_by_rewarder(env.clone(), manufacturer.clone());
+        
+        let mut best_incentive: Option<Incentive> = None;
+        let mut highest_reward: u64 = 0;
+        
+        // Iterate through all incentives and find the best active one
+        for incentive_id in incentive_ids.iter() {
+            if let Some(incentive) = Self::get_incentive_internal(&env, incentive_id) {
+                // Check if incentive matches criteria: active and correct waste type
+                if incentive.active && incentive.waste_type == waste_type {
+                    // Keep track of the incentive with highest reward
+                    if incentive.reward_points > highest_reward {
+                        highest_reward = incentive.reward_points;
+                        best_incentive = Some(incentive);
+                    }
+                }
+            }
+        }
+        
+        best_incentive
+    }
+
     /// Create a new incentive
     pub fn create_incentive(
         env: Env,
