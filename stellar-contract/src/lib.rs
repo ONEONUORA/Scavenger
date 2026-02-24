@@ -4,7 +4,13 @@ mod types;
 
 pub use types::{Incentive, Material, ParticipantRole, RecyclingStats, Waste, WasteTransfer, WasteType};
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, Vec};
+
+// Storage keys
+const ADMIN: Symbol = symbol_short!("ADMIN");
+const CHARITY: Symbol = symbol_short!("CHARITY");
+const COLLECTOR_PCT: Symbol = symbol_short!("COL_PCT");
+const OWNER_PCT: Symbol = symbol_short!("OWN_PCT");
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -14,11 +20,139 @@ pub struct Participant {
     pub registered_at: u64,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticipantInfo {
+    pub participant: Participant,
+    pub stats: RecyclingStats,
+}
+
 #[contract]
 pub struct ScavengerContract;
 
 #[contractimpl]
 impl ScavengerContract {
+    // ========== Admin Functions ==========
+
+    /// Initialize admin (should be called once during contract deployment)
+    pub fn initialize_admin(env: Env, admin: Address) {
+        admin.require_auth();
+        
+        // Check if admin is already set
+        if env.storage().instance().has(&ADMIN) {
+            panic!("Admin already initialized");
+        }
+        
+        env.storage().instance().set(&ADMIN, &admin);
+    }
+
+    /// Get the current admin address
+    pub fn get_admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&ADMIN)
+            .expect("Admin not set")
+    }
+
+    /// Check if caller is admin
+    fn require_admin(env: &Env, caller: &Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN)
+            .expect("Admin not set");
+        
+        if admin != *caller {
+            panic!("Unauthorized: caller is not admin");
+        }
+        
+        caller.require_auth();
+    }
+
+    // ========== Charity Contract Functions ==========
+
+    /// Set the charity contract address (admin only)
+    pub fn set_charity_contract(env: Env, admin: Address, charity_address: Address) {
+        Self::require_admin(&env, &admin);
+        
+        // Validate address (basic check - address should not be the zero address)
+        // In Soroban, we can't easily check for zero address, but we can ensure it's different from admin
+        if charity_address == admin {
+            panic!("Charity address cannot be the same as admin");
+        }
+        
+        env.storage().instance().set(&CHARITY, &charity_address);
+    }
+
+    /// Get the charity contract address
+    pub fn get_charity_contract(env: Env) -> Option<Address> {
+        env.storage().instance().get(&CHARITY)
+    }
+
+    // ========== Percentage Configuration Functions ==========
+
+    /// Set both collector and owner percentages (admin only)
+    pub fn set_percentages(
+        env: Env,
+        admin: Address,
+        collector_percentage: u32,
+        owner_percentage: u32,
+    ) {
+        Self::require_admin(&env, &admin);
+        
+        // Validate percentages sum
+        if collector_percentage + owner_percentage > 100 {
+            panic!("Total percentages cannot exceed 100");
+        }
+        
+        env.storage().instance().set(&COLLECTOR_PCT, &collector_percentage);
+        env.storage().instance().set(&OWNER_PCT, &owner_percentage);
+    }
+
+    /// Get the collector percentage
+    pub fn get_collector_percentage(env: Env) -> Option<u32> {
+        env.storage().instance().get(&COLLECTOR_PCT)
+    }
+
+    /// Get the owner percentage
+    pub fn get_owner_percentage(env: Env) -> Option<u32> {
+        env.storage().instance().get(&OWNER_PCT)
+    }
+
+    /// Update only the collector percentage (admin only)
+    pub fn set_collector_percentage(env: Env, admin: Address, new_percentage: u32) {
+        Self::require_admin(&env, &admin);
+        
+        // Get current owner percentage to validate total
+        let owner_pct: u32 = env.storage()
+            .instance()
+            .get(&OWNER_PCT)
+            .unwrap_or(0);
+        
+        if new_percentage + owner_pct > 100 {
+            panic!("Total percentages cannot exceed 100");
+        }
+        
+        env.storage().instance().set(&COLLECTOR_PCT, &new_percentage);
+    }
+
+    /// Update only the owner percentage (admin only)
+    pub fn set_owner_percentage(env: Env, admin: Address, new_percentage: u32) {
+        Self::require_admin(&env, &admin);
+        
+        // Get current collector percentage to validate total
+        let collector_pct: u32 = env.storage()
+            .instance()
+            .get(&COLLECTOR_PCT)
+            .unwrap_or(0);
+        
+        if collector_pct + new_percentage > 100 {
+            panic!("Total percentages cannot exceed 100");
+        }
+        
+        env.storage().instance().set(&OWNER_PCT, &new_percentage);
+    }
+
     // ========== Participant Storage Functions ==========
 
     /// Store a participant record
@@ -63,9 +197,9 @@ impl ScavengerContract {
         env.storage().instance().set(&key, material);
     }
 
-    /// Retrieve a waste record by ID
+    /// Retrieve a waste record by ID (internal helper)
     /// Returns None if waste doesn't exist
-    fn get_waste(env: &Env, waste_id: u64) -> Option<Material> {
+    fn get_waste_internal(env: &Env, waste_id: u64) -> Option<Material> {
         let key = ("waste", waste_id);
         env.storage().instance().get(&key)
     }
@@ -129,6 +263,20 @@ impl ScavengerContract {
         env.storage().instance().get(&key)
     }
 
+    /// Get participant information with current statistics
+    /// Returns participant details along with their recycling statistics
+    /// Returns None if participant is not registered
+    pub fn get_participant_info(env: Env, address: Address) -> Option<ParticipantInfo> {
+        let participant = Self::get_participant(env.clone(), address.clone())?;
+        let stats = Self::get_stats(env, address.clone())
+            .unwrap_or_else(|| RecyclingStats::new(address));
+        
+        Some(ParticipantInfo {
+            participant,
+            stats,
+        })
+    }
+
     /// Update participant role
     /// Preserves registration timestamp and other data
     pub fn update_role(env: Env, address: Address, new_role: ParticipantRole) -> Participant {
@@ -150,6 +298,13 @@ impl ScavengerContract {
     pub fn get_transfer_history(env: Env, waste_id: u64) -> Vec<WasteTransfer> {
         let key = ("transfers", waste_id);
         env.storage().instance().get(&key).unwrap_or(Vec::new(&env))
+    }
+
+    /// Get complete transfer history for a waste (alias for get_transfer_history)
+    /// Returns chronologically ordered list of all transfers
+    /// Includes all transfer details: from, to, timestamp, and notes
+    pub fn get_waste_transfer_history(env: Env, waste_id: u64) -> Vec<WasteTransfer> {
+        Self::get_transfer_history(env, waste_id)
     }
 
     /// Record a waste transfer
@@ -192,7 +347,7 @@ impl ScavengerContract {
         }
 
         // Get and update material
-        let mut material: Material = Self::get_waste(&env, waste_id).expect("Waste not found");
+        let mut material: Material = Self::get_waste_internal(&env, waste_id).expect("Waste not found");
 
         // Verify sender owns the waste
         if material.submitter != from {
@@ -603,14 +758,43 @@ impl ScavengerContract {
         results
     }
 
-    /// Get material by ID (alias for get_waste for backward compatibility)
+    /// Get material by ID (alias for backward compatibility)
     pub fn get_material(env: Env, material_id: u64) -> Option<Material> {
-        Self::get_waste(&env, material_id)
+        Self::get_waste(env, material_id)
     }
 
-    /// Get waste by ID
+    /// Get waste by ID (alias for backward compatibility)
     pub fn get_waste_by_id(env: Env, waste_id: u64) -> Option<Material> {
-        Self::get_waste(&env, waste_id)
+        Self::get_waste(env, waste_id)
+    }
+
+    /// Get waste by ID (primary public interface)
+    /// Returns the waste/material record if it exists, None otherwise
+    pub fn get_waste(env: Env, waste_id: u64) -> Option<Material> {
+        let key = ("waste", waste_id);
+        env.storage().instance().get(&key)
+    }
+
+    /// Get all waste IDs owned by a participant
+    /// Returns a vector of waste IDs where the participant is the current submitter/owner
+    pub fn get_participant_wastes(env: Env, participant: Address) -> Vec<u64> {
+        let mut waste_ids = Vec::new(&env);
+        let waste_count = env.storage()
+            .instance()
+            .get::<_, u64>(&("waste_count",))
+            .unwrap_or(0);
+
+        // Iterate through all wastes and collect IDs owned by participant
+        for waste_id in 1..=waste_count {
+            let key = ("waste", waste_id);
+            if let Some(material) = env.storage().instance().get::<_, Material>(&key) {
+                if material.submitter == participant {
+                    waste_ids.push_back(waste_id);
+                }
+            }
+        }
+
+        waste_ids
     }
 
     /// Get multiple wastes by IDs (batch retrieval)
@@ -621,7 +805,7 @@ impl ScavengerContract {
         let mut results = soroban_sdk::Vec::new(&env);
 
         for waste_id in waste_ids.iter() {
-            results.push_back(Self::get_waste(&env, waste_id));
+            results.push_back(Self::get_waste_internal(&env, waste_id));
         }
 
         results
@@ -645,7 +829,7 @@ impl ScavengerContract {
 
         // Get and verify material using new storage system
         let mut material: Material =
-            Self::get_waste(&env, material_id).expect("Material not found");
+            Self::get_waste_internal(&env, material_id).expect("Material not found");
 
         material.verify();
         Self::set_waste(&env, material_id, &material);
@@ -688,7 +872,7 @@ impl ScavengerContract {
         let mut results = soroban_sdk::Vec::new(&env);
 
         for material_id in material_ids.iter() {
-            if let Some(mut material) = Self::get_waste(&env, material_id) {
+            if let Some(mut material) = Self::get_waste_internal(&env, material_id) {
                 material.verify();
                 Self::set_waste(&env, material_id, &material);
 
@@ -731,6 +915,44 @@ impl ScavengerContract {
     pub fn get_incentives_by_waste_type(env: Env, waste_type: WasteType) -> Vec<u64> {
         let key = ("general_incentives", waste_type);
         env.storage().instance().get(&key).unwrap_or(Vec::new(&env))
+    }
+
+    /// Get all active incentives for a specific waste type, sorted by reward amount
+    /// Returns only active incentives, sorted in descending order by reward_points
+    pub fn get_incentives(env: Env, waste_type: WasteType) -> Vec<Incentive> {
+        // Get all incentive IDs for this waste type
+        let incentive_ids = Self::get_incentives_by_waste_type(env.clone(), waste_type);
+        
+        let mut active_incentives = Vec::new(&env);
+        
+        // Collect all active incentives
+        for incentive_id in incentive_ids.iter() {
+            if let Some(incentive) = Self::get_incentive_internal(&env, incentive_id) {
+                // Filter: only include active incentives
+                if incentive.active {
+                    active_incentives.push_back(incentive);
+                }
+            }
+        }
+        
+        // Sort by reward_points in descending order (highest rewards first)
+        // Using bubble sort since Soroban Vec doesn't have built-in sort
+        let len = active_incentives.len();
+        for i in 0..len {
+            for j in 0..(len - i - 1) {
+                let curr = active_incentives.get(j).unwrap();
+                let next = active_incentives.get(j + 1).unwrap();
+                
+                if curr.reward_points < next.reward_points {
+                    // Swap elements
+                    let temp = curr.clone();
+                    active_incentives.set(j, next);
+                    active_incentives.set(j + 1, temp);
+                }
+            }
+        }
+        
+        active_incentives
     }
 
     /// Create a new incentive
@@ -815,7 +1037,7 @@ impl ScavengerContract {
         claimer.require_auth();
 
         // Get material and verify it exists and is verified
-        let material = Self::get_waste(&env, material_id).expect("Material not found");
+        let material = Self::get_waste_internal(&env, material_id).expect("Material not found");
 
         if !material.verified {
             panic!("Material must be verified to claim incentive");
@@ -856,10 +1078,7 @@ impl ScavengerContract {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-    use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env};
+    // ========== Participant Tests ==========
 
     #[test]
     fn test_register_participant() {
