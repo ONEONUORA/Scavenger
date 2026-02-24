@@ -1,5 +1,6 @@
 #![no_std]
 
+mod events;
 mod types;
 
 
@@ -789,9 +790,15 @@ impl ScavengerContract {
             .instance()
             .set(&("participant_wastes", recycler.clone()), &waste_list);
 
-        env.events().publish(
-            (soroban_sdk::symbol_short!("recycled"), waste_id),
-            (waste_type, weight, recycler, latitude, longitude, timestamp),
+        // Emit waste registered event
+        events::emit_waste_registered(
+            &env,
+            waste_id,
+            &recycler,
+            waste_type,
+            weight,
+            latitude,
+            longitude,
         );
 
         waste_id
