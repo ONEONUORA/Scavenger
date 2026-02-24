@@ -2,17 +2,34 @@
 
 mod types;
 
-pub use types::{Incentive, Material, ParticipantRole, RecyclingStats, WasteTransfer, WasteType};
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Vec};
+pub use types::{Material, ParticipantRole, RecyclingStats, Waste, WasteStatus, WasteType};
+
+pub use types::{Incentive, Material, ParticipantRole, RecyclingStats, Waste, WasteTransfer, WasteType};
+
+
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, Vec};
+
+// Storage keys
+const ADMIN: Symbol = symbol_short!("ADMIN");
+const CHARITY: Symbol = symbol_short!("CHARITY");
+const COLLECTOR_PCT: Symbol = symbol_short!("COL_PCT");
+const OWNER_PCT: Symbol = symbol_short!("OWN_PCT");
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Participant {
     pub address: Address,
     pub role: ParticipantRole,
+    pub name: soroban_sdk::Symbol,
+    pub latitude: i128,
+    pub longitude: i128,
+    pub is_registered: bool,
+    pub total_waste_processed: u128,
+    pub total_tokens_earned: u128,
     pub registered_at: u64,
 }
+
 
 /// Represents a manufacturer incentive program for recycling specific waste types
 #[contracttype]
@@ -32,6 +49,13 @@ pub struct Incentive {
     pub is_active: bool,
     /// Timestamp when the incentive was created
     pub created_at: u64,
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticipantInfo {
+    pub participant: Participant,
+    pub stats: RecyclingStats,
+
 }
 
 #[contract]
@@ -39,6 +63,127 @@ pub struct ScavengerContract;
 
 #[contractimpl]
 impl ScavengerContract {
+    // ========== Admin Functions ==========
+
+    /// Initialize admin (should be called once during contract deployment)
+    pub fn initialize_admin(env: Env, admin: Address) {
+        admin.require_auth();
+        
+        // Check if admin is already set
+        if env.storage().instance().has(&ADMIN) {
+            panic!("Admin already initialized");
+        }
+        
+        env.storage().instance().set(&ADMIN, &admin);
+    }
+
+    /// Get the current admin address
+    pub fn get_admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&ADMIN)
+            .expect("Admin not set")
+    }
+
+    /// Check if caller is admin
+    fn require_admin(env: &Env, caller: &Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN)
+            .expect("Admin not set");
+        
+        if admin != *caller {
+            panic!("Unauthorized: caller is not admin");
+        }
+        
+        caller.require_auth();
+    }
+
+    // ========== Charity Contract Functions ==========
+
+    /// Set the charity contract address (admin only)
+    pub fn set_charity_contract(env: Env, admin: Address, charity_address: Address) {
+        Self::require_admin(&env, &admin);
+        
+        // Validate address (basic check - address should not be the zero address)
+        // In Soroban, we can't easily check for zero address, but we can ensure it's different from admin
+        if charity_address == admin {
+            panic!("Charity address cannot be the same as admin");
+        }
+        
+        env.storage().instance().set(&CHARITY, &charity_address);
+    }
+
+    /// Get the charity contract address
+    pub fn get_charity_contract(env: Env) -> Option<Address> {
+        env.storage().instance().get(&CHARITY)
+    }
+
+    // ========== Percentage Configuration Functions ==========
+
+    /// Set both collector and owner percentages (admin only)
+    pub fn set_percentages(
+        env: Env,
+        admin: Address,
+        collector_percentage: u32,
+        owner_percentage: u32,
+    ) {
+        Self::require_admin(&env, &admin);
+        
+        // Validate percentages sum
+        if collector_percentage + owner_percentage > 100 {
+            panic!("Total percentages cannot exceed 100");
+        }
+        
+        env.storage().instance().set(&COLLECTOR_PCT, &collector_percentage);
+        env.storage().instance().set(&OWNER_PCT, &owner_percentage);
+    }
+
+    /// Get the collector percentage
+    pub fn get_collector_percentage(env: Env) -> Option<u32> {
+        env.storage().instance().get(&COLLECTOR_PCT)
+    }
+
+    /// Get the owner percentage
+    pub fn get_owner_percentage(env: Env) -> Option<u32> {
+        env.storage().instance().get(&OWNER_PCT)
+    }
+
+    /// Update only the collector percentage (admin only)
+    pub fn set_collector_percentage(env: Env, admin: Address, new_percentage: u32) {
+        Self::require_admin(&env, &admin);
+        
+        // Get current owner percentage to validate total
+        let owner_pct: u32 = env.storage()
+            .instance()
+            .get(&OWNER_PCT)
+            .unwrap_or(0);
+        
+        if new_percentage + owner_pct > 100 {
+            panic!("Total percentages cannot exceed 100");
+        }
+        
+        env.storage().instance().set(&COLLECTOR_PCT, &new_percentage);
+    }
+
+    /// Update only the owner percentage (admin only)
+    pub fn set_owner_percentage(env: Env, admin: Address, new_percentage: u32) {
+        Self::require_admin(&env, &admin);
+        
+        // Get current collector percentage to validate total
+        let collector_pct: u32 = env.storage()
+            .instance()
+            .get(&COLLECTOR_PCT)
+            .unwrap_or(0);
+        
+        if collector_pct + new_percentage > 100 {
+            panic!("Total percentages cannot exceed 100");
+        }
+        
+        env.storage().instance().set(&OWNER_PCT, &new_percentage);
+    }
+
     // ========== Participant Storage Functions ==========
 
     /// Store a participant record
@@ -55,8 +200,19 @@ impl ScavengerContract {
     }
 
     /// Register a new participant with a specific role
+
+    pub fn register_participant(
+        env: Env,
+        address: Address,
+        role: ParticipantRole,
+        name: soroban_sdk::Symbol,
+        latitude: i128,
+        longitude: i128,
+    ) -> Participant {
+
     /// Prevents duplicate registrations
     pub fn register_participant(env: Env, address: Address, role: ParticipantRole) -> Participant {
+
         address.require_auth();
 
         // Check if already registered
@@ -67,6 +223,12 @@ impl ScavengerContract {
         let participant = Participant {
             address: address.clone(),
             role,
+            name,
+            latitude,
+            longitude,
+            is_registered: true,
+            total_waste_processed: 0,
+            total_tokens_earned: 0,
             registered_at: env.ledger().timestamp(),
         };
 
@@ -76,6 +238,43 @@ impl ScavengerContract {
         participant
     }
 
+    /// Update participant statistics after processing waste
+    /// Uses checked arithmetic to prevent overflow
+    fn update_participant_stats(
+        env: &Env,
+        address: &Address,
+        waste_weight: u64,
+        tokens_earned: u64,
+    ) {
+        let key = (address.clone(),);
+        if let Some(mut participant) = env.storage().instance().get::<_, Participant>(&key) {
+            // Use checked arithmetic to prevent overflow
+            participant.total_waste_processed = participant
+                .total_waste_processed
+                .checked_add(waste_weight as u128)
+                .expect("Overflow in total_waste_processed");
+            
+            participant.total_tokens_earned = participant
+                .total_tokens_earned
+                .checked_add(tokens_earned as u128)
+                .expect("Overflow in total_tokens_earned");
+            
+            env.storage().instance().set(&key, &participant);
+        }
+    }
+
+    /// Validate that a participant is registered before allowing restricted actions
+    fn require_registered(env: &Env, address: &Address) {
+        let key = (address.clone(),);
+        let participant: Option<Participant> = env.storage().instance().get(&key);
+        
+        match participant {
+            Some(p) if p.is_registered => {},
+            Some(_) => panic!("Participant is not registered"),
+            None => panic!("Participant not found"),
+        }
+    }
+
     /// Store a waste record by ID
     /// Internal helper function for efficient waste storage
     fn set_waste(env: &Env, waste_id: u64, material: &Material) {
@@ -83,9 +282,9 @@ impl ScavengerContract {
         env.storage().instance().set(&key, material);
     }
 
-    /// Retrieve a waste record by ID
+    /// Retrieve a waste record by ID (internal helper)
     /// Returns None if waste doesn't exist
-    fn get_waste(env: &Env, waste_id: u64) -> Option<Material> {
+    fn get_waste_internal(env: &Env, waste_id: u64) -> Option<Material> {
         let key = ("waste", waste_id);
         env.storage().instance().get(&key)
     }
@@ -305,6 +504,20 @@ impl ScavengerContract {
         env.storage().instance().get(&key)
     }
 
+    /// Get participant information with current statistics
+    /// Returns participant details along with their recycling statistics
+    /// Returns None if participant is not registered
+    pub fn get_participant_info(env: Env, address: Address) -> Option<ParticipantInfo> {
+        let participant = Self::get_participant(env.clone(), address.clone())?;
+        let stats = Self::get_stats(env, address.clone())
+            .unwrap_or_else(|| RecyclingStats::new(address));
+        
+        Some(ParticipantInfo {
+            participant,
+            stats,
+        })
+    }
+
     /// Update participant role
     /// Preserves registration timestamp and other data
     pub fn update_role(env: Env, address: Address, new_role: ParticipantRole) -> Participant {
@@ -313,11 +526,61 @@ impl ScavengerContract {
         let mut participant: Participant =
             Self::get_participant(env.clone(), address.clone()).expect("Participant not found");
 
+        // Validate participant is registered
+        if !participant.is_registered {
+            panic!("Participant is not registered");
+        }
+
         participant.role = new_role;
         Self::set_participant(&env, &address, &participant);
 
         participant
     }
+
+
+    /// Deregister a participant (sets is_registered to false)
+    pub fn deregister_participant(env: Env, address: Address) -> Participant {
+        address.require_auth();
+
+        let key = (address.clone(),);
+        let mut participant: Participant = env
+            .storage()
+            .instance()
+            .get(&key)
+            .expect("Participant not found");
+
+        participant.is_registered = false;
+        env.storage().instance().set(&key, &participant);
+
+        participant
+    }
+
+    /// Update participant location
+    pub fn update_location(
+        env: Env,
+        address: Address,
+        latitude: i128,
+        longitude: i128,
+    ) -> Participant {
+        address.require_auth();
+
+        let key = (address.clone(),);
+        let mut participant: Participant = env
+            .storage()
+            .instance()
+            .get(&key)
+            .expect("Participant not found");
+
+        // Validate participant is registered
+        if !participant.is_registered {
+            panic!("Participant is not registered");
+        }
+
+        participant.latitude = latitude;
+        participant.longitude = longitude;
+        env.storage().instance().set(&key, &participant);
+
+        participant
 
     // ========== Waste Transfer History Functions ==========
 
@@ -328,6 +591,13 @@ impl ScavengerContract {
         env.storage().instance().get(&key).unwrap_or(Vec::new(&env))
     }
 
+    /// Get complete transfer history for a waste (alias for get_transfer_history)
+    /// Returns chronologically ordered list of all transfers
+    /// Includes all transfer details: from, to, timestamp, and notes
+    pub fn get_waste_transfer_history(env: Env, waste_id: u64) -> Vec<WasteTransfer> {
+        Self::get_transfer_history(env, waste_id)
+    }
+
     /// Record a waste transfer
     /// Appends to immutable history
     fn record_transfer(env: &Env, waste_id: u64, from: Address, to: Address, note: String) {
@@ -335,7 +605,15 @@ impl ScavengerContract {
         let mut history: Vec<WasteTransfer> =
             env.storage().instance().get(&key).unwrap_or(Vec::new(env));
 
-        let transfer = WasteTransfer::new(waste_id, from, to, env.ledger().timestamp(), note);
+        let transfer = WasteTransfer::new(
+            waste_id as u128,
+            from,
+            to,
+            env.ledger().timestamp(),
+            0,
+            0,
+            soroban_sdk::symbol_short!("note"),
+        );
 
         history.push_back(transfer);
         env.storage().instance().set(&key, &history);
@@ -360,7 +638,7 @@ impl ScavengerContract {
         }
 
         // Get and update material
-        let mut material: Material = Self::get_waste(&env, waste_id).expect("Waste not found");
+        let mut material: Material = Self::get_waste_internal(&env, waste_id).expect("Waste not found");
 
         // Verify sender owns the waste
         if material.submitter != from {
@@ -393,13 +671,14 @@ impl ScavengerContract {
         // This would need to iterate through all wastes
         // For now, returning empty as this requires additional indexing
         Vec::new(&env)
+
     }
 
     /// Validate if a participant can perform a specific action
     pub fn can_collect(env: Env, address: Address) -> bool {
         let key = (address,);
         if let Some(participant) = env.storage().instance().get::<_, Participant>(&key) {
-            participant.role.can_collect_materials()
+            participant.is_registered && participant.role.can_collect_materials()
         } else {
             false
         }
@@ -409,7 +688,7 @@ impl ScavengerContract {
     pub fn can_manufacture(env: Env, address: Address) -> bool {
         let key = (address,);
         if let Some(participant) = env.storage().instance().get::<_, Participant>(&key) {
-            participant.role.can_manufacture()
+            participant.is_registered && participant.role.can_manufacture()
         } else {
             false
         }
@@ -424,6 +703,9 @@ impl ScavengerContract {
         description: String,
     ) -> Material {
         submitter.require_auth();
+
+        // Validate submitter is registered
+        Self::require_registered(&env, &submitter);
 
         // Get next waste ID using the new storage system
         let waste_id = Self::next_waste_id(&env);
@@ -449,9 +731,285 @@ impl ScavengerContract {
             .unwrap_or_else(|| RecyclingStats::new(submitter.clone()));
 
         stats.record_submission(&material);
-        env.storage().instance().set(&("stats", submitter), &stats);
+        env.storage().instance().set(&("stats", submitter.clone()), &stats);
+
+        // Update participant stats
+        Self::update_participant_stats(&env, &submitter, weight, 0);
 
         material
+    }
+
+    /// Register new waste with location data
+    pub fn recycle_waste(
+        env: Env,
+        waste_type: WasteType,
+        weight: u128,
+        recycler: Address,
+        latitude: i128,
+        longitude: i128,
+    ) -> u128 {
+        recycler.require_auth();
+
+        if !Self::is_participant_registered(env.clone(), recycler.clone()) {
+            panic!("Participant not registered");
+        }
+
+        let waste_id = Self::next_waste_id(&env) as u128;
+        let timestamp = env.ledger().timestamp();
+
+        let waste = types::Waste::new(
+            waste_id,
+            waste_type,
+            weight,
+            recycler.clone(),
+            latitude,
+            longitude,
+            timestamp,
+            true,
+            false,
+            recycler.clone(),
+        );
+
+        env.storage().instance().set(&("waste_v2", waste_id), &waste);
+
+        let mut waste_list: Vec<u128> = env
+            .storage()
+            .instance()
+            .get(&("participant_wastes", recycler.clone()))
+            .unwrap_or(Vec::new(&env));
+        waste_list.push_back(waste_id);
+        env.storage()
+            .instance()
+            .set(&("participant_wastes", recycler.clone()), &waste_list);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("recycled"), waste_id),
+            (waste_type, weight, recycler, latitude, longitude, timestamp),
+        );
+
+        waste_id
+    }
+
+    /// Transfer waste between participants with location tracking
+    pub fn transfer_waste_v2(
+        env: Env,
+        waste_id: u128,
+        from: Address,
+        to: Address,
+        latitude: i128,
+        longitude: i128,
+    ) -> WasteTransfer {
+        from.require_auth();
+
+        let mut waste: types::Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", waste_id))
+            .expect("Waste not found");
+
+        if waste.current_owner != from {
+            panic!("Caller does not own waste");
+        }
+
+        let to_key = (to.clone(),);
+        let to_participant: Participant = env
+            .storage()
+            .instance()
+            .get(&to_key)
+            .expect("Recipient not registered");
+
+        let from_key = (from.clone(),);
+        let from_participant: Participant = env.storage().instance().get(&from_key).unwrap();
+
+        let valid = match (from_participant.role, to_participant.role) {
+            (ParticipantRole::Recycler, ParticipantRole::Collector) => true,
+            (ParticipantRole::Recycler, ParticipantRole::Manufacturer) => true,
+            (ParticipantRole::Collector, ParticipantRole::Manufacturer) => true,
+            _ => false,
+        };
+
+        if !valid {
+            panic!("Invalid transfer");
+        }
+
+        waste.transfer_to(to.clone());
+        env.storage().instance().set(&("waste_v2", waste_id), &waste);
+
+        let from_list: Vec<u128> = env
+            .storage()
+            .instance()
+            .get(&("participant_wastes", from.clone()))
+            .unwrap_or(Vec::new(&env));
+        let mut new_from_list = Vec::new(&env);
+        for id in from_list.iter() {
+            if id != waste_id {
+                new_from_list.push_back(id);
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&("participant_wastes", from.clone()), &new_from_list);
+
+        let mut to_list: Vec<u128> = env
+            .storage()
+            .instance()
+            .get(&("participant_wastes", to.clone()))
+            .unwrap_or(Vec::new(&env));
+        to_list.push_back(waste_id);
+        env.storage()
+            .instance()
+            .set(&("participant_wastes", to.clone()), &to_list);
+
+        let timestamp = env.ledger().timestamp();
+        let transfer = WasteTransfer::new(
+            waste_id,
+            from.clone(),
+            to.clone(),
+            timestamp,
+            latitude,
+            longitude,
+            soroban_sdk::symbol_short!("transfer"),
+        );
+
+        let mut history: Vec<WasteTransfer> = env
+            .storage()
+            .instance()
+            .get(&("transfer_history", waste_id))
+            .unwrap_or(Vec::new(&env));
+        history.push_back(transfer.clone());
+        env.storage()
+            .instance()
+            .set(&("transfer_history", waste_id), &history);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("transfer"), waste_id),
+            (from, to, timestamp),
+        );
+
+        transfer
+    }
+
+    /// Transfer aggregated waste from collector to manufacturer
+    pub fn transfer_collected_waste(
+        env: Env,
+        waste_type: WasteType,
+        collector: Address,
+        manufacturer: Address,
+        latitude: i128,
+        longitude: i128,
+        notes: soroban_sdk::Symbol,
+    ) -> u128 {
+        collector.require_auth();
+
+        let collector_key = (collector.clone(),);
+        let collector_participant: Participant = env
+            .storage()
+            .instance()
+            .get(&collector_key)
+            .expect("Collector not registered");
+
+        if collector_participant.role != ParticipantRole::Collector {
+            panic!("Only collectors can use this");
+        }
+
+        let manufacturer_key = (manufacturer.clone(),);
+        let manufacturer_participant: Participant = env
+            .storage()
+            .instance()
+            .get(&manufacturer_key)
+            .expect("Manufacturer not registered");
+
+        if manufacturer_participant.role != ParticipantRole::Manufacturer {
+            panic!("Recipient must be manufacturer");
+        }
+
+        let waste_id = Self::next_waste_id(&env) as u128;
+        let timestamp = env.ledger().timestamp();
+
+        let waste = types::Waste::new(
+            waste_id,
+            waste_type,
+            0,
+            manufacturer.clone(),
+            latitude,
+            longitude,
+            timestamp,
+            true,
+            false,
+            manufacturer.clone(),
+        );
+
+        env.storage().instance().set(&("waste_v2", waste_id), &waste);
+
+        let mut manufacturer_list: Vec<u128> = env
+            .storage()
+            .instance()
+            .get(&("participant_wastes", manufacturer.clone()))
+            .unwrap_or(Vec::new(&env));
+        manufacturer_list.push_back(waste_id);
+        env.storage()
+            .instance()
+            .set(&("participant_wastes", manufacturer.clone()), &manufacturer_list);
+
+        let transfer = WasteTransfer::new(
+            waste_id,
+            collector.clone(),
+            manufacturer.clone(),
+            timestamp,
+            latitude,
+            longitude,
+            notes,
+        );
+
+        let mut history: Vec<WasteTransfer> = env
+            .storage()
+            .instance()
+            .get(&("transfer_history", waste_id))
+            .unwrap_or(Vec::new(&env));
+        history.push_back(transfer);
+        env.storage()
+            .instance()
+            .set(&("transfer_history", waste_id), &history);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("bulk_xfr"), waste_id),
+            (collector, manufacturer, waste_type, timestamp),
+        );
+
+        waste_id
+    }
+
+    /// Confirm waste details
+    pub fn confirm_waste_details(
+        env: Env,
+        waste_id: u128,
+        confirmer: Address,
+    ) -> types::Waste {
+        confirmer.require_auth();
+
+        let mut waste: types::Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", waste_id))
+            .expect("Waste not found");
+
+        if waste.current_owner == confirmer {
+            panic!("Owner cannot confirm own waste");
+        }
+
+        if waste.is_confirmed {
+            panic!("Waste already confirmed");
+        }
+
+        waste.confirm(confirmer.clone());
+        env.storage().instance().set(&("waste_v2", waste_id), &waste);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("confirmed"), waste_id),
+            (confirmer, env.ledger().timestamp()),
+        );
+
+        waste
     }
 
     /// Batch submit multiple materials for recycling
@@ -463,6 +1021,9 @@ impl ScavengerContract {
     ) -> soroban_sdk::Vec<Material> {
         submitter.require_auth();
 
+        // Validate submitter is registered
+        Self::require_registered(&env, &submitter);
+
         let mut results = soroban_sdk::Vec::new(&env);
         let timestamp = env.ledger().timestamp();
 
@@ -472,6 +1033,8 @@ impl ScavengerContract {
             .instance()
             .get(&("stats", submitter.clone()))
             .unwrap_or_else(|| RecyclingStats::new(submitter.clone()));
+
+        let mut total_weight: u64 = 0;
 
         // Process each material
         for item in materials.iter() {
@@ -490,22 +1053,57 @@ impl ScavengerContract {
             Self::set_waste(&env, waste_id, &material);
             stats.record_submission(&material);
             results.push_back(material);
+            
+            // Accumulate weight with overflow check
+            total_weight = total_weight.checked_add(weight).expect("Overflow in batch weight");
         }
 
         // Update stats once at the end
-        env.storage().instance().set(&("stats", submitter), &stats);
+        env.storage().instance().set(&("stats", submitter.clone()), &stats);
+
+        // Update participant stats
+        Self::update_participant_stats(&env, &submitter, total_weight, 0);
 
         results
     }
 
-    /// Get material by ID (alias for get_waste for backward compatibility)
+    /// Get material by ID (alias for backward compatibility)
     pub fn get_material(env: Env, material_id: u64) -> Option<Material> {
-        Self::get_waste(&env, material_id)
+        Self::get_waste(env, material_id)
     }
 
-    /// Get waste by ID
+    /// Get waste by ID (alias for backward compatibility)
     pub fn get_waste_by_id(env: Env, waste_id: u64) -> Option<Material> {
-        Self::get_waste(&env, waste_id)
+        Self::get_waste(env, waste_id)
+    }
+
+    /// Get waste by ID (primary public interface)
+    /// Returns the waste/material record if it exists, None otherwise
+    pub fn get_waste(env: Env, waste_id: u64) -> Option<Material> {
+        let key = ("waste", waste_id);
+        env.storage().instance().get(&key)
+    }
+
+    /// Get all waste IDs owned by a participant
+    /// Returns a vector of waste IDs where the participant is the current submitter/owner
+    pub fn get_participant_wastes(env: Env, participant: Address) -> Vec<u64> {
+        let mut waste_ids = Vec::new(&env);
+        let waste_count = env.storage()
+            .instance()
+            .get::<_, u64>(&("waste_count",))
+            .unwrap_or(0);
+
+        // Iterate through all wastes and collect IDs owned by participant
+        for waste_id in 1..=waste_count {
+            let key = ("waste", waste_id);
+            if let Some(material) = env.storage().instance().get::<_, Material>(&key) {
+                if material.submitter == participant {
+                    waste_ids.push_back(waste_id);
+                }
+            }
+        }
+
+        waste_ids
     }
 
     /// Get multiple wastes by IDs (batch retrieval)
@@ -516,7 +1114,7 @@ impl ScavengerContract {
         let mut results = soroban_sdk::Vec::new(&env);
 
         for waste_id in waste_ids.iter() {
-            results.push_back(Self::get_waste(&env, waste_id));
+            results.push_back(Self::get_waste_internal(&env, waste_id));
         }
 
         results
@@ -526,7 +1124,7 @@ impl ScavengerContract {
     pub fn verify_material(env: Env, material_id: u64, verifier: Address) -> Material {
         verifier.require_auth();
 
-        // Check if verifier is a recycler
+        // Check if verifier is a recycler and is registered
         let verifier_key = (verifier.clone(),);
         let participant: Participant = env
             .storage()
@@ -534,16 +1132,23 @@ impl ScavengerContract {
             .get(&verifier_key)
             .expect("Verifier not registered");
 
+        if !participant.is_registered {
+            panic!("Verifier is not registered");
+        }
+
         if !participant.role.can_process_recyclables() {
             panic!("Only recyclers can verify materials");
         }
 
         // Get and verify material using new storage system
         let mut material: Material =
-            Self::get_waste(&env, material_id).expect("Material not found");
+            Self::get_waste_internal(&env, material_id).expect("Material not found");
 
         material.verify();
         Self::set_waste(&env, material_id, &material);
+
+        // Calculate tokens earned
+        let tokens_earned = material.calculate_reward_points();
 
         // Update submitter stats
         let mut stats: RecyclingStats = env
@@ -557,6 +1162,9 @@ impl ScavengerContract {
             .instance()
             .set(&("stats", material.submitter.clone()), &stats);
 
+        // Update submitter's participant stats with tokens earned
+        Self::update_participant_stats(&env, &material.submitter, 0, tokens_earned);
+
         material
     }
 
@@ -568,13 +1176,17 @@ impl ScavengerContract {
     ) -> soroban_sdk::Vec<Material> {
         verifier.require_auth();
 
-        // Check if verifier is a recycler
+        // Check if verifier is a recycler and is registered
         let verifier_key = (verifier.clone(),);
         let participant: Participant = env
             .storage()
             .instance()
             .get(&verifier_key)
             .expect("Verifier not registered");
+
+        if !participant.is_registered {
+            panic!("Verifier is not registered");
+        }
 
         if !participant.role.can_process_recyclables() {
             panic!("Only recyclers can verify materials");
@@ -583,9 +1195,12 @@ impl ScavengerContract {
         let mut results = soroban_sdk::Vec::new(&env);
 
         for material_id in material_ids.iter() {
-            if let Some(mut material) = Self::get_waste(&env, material_id) {
+            if let Some(mut material) = Self::get_waste_internal(&env, material_id) {
                 material.verify();
                 Self::set_waste(&env, material_id, &material);
+
+                // Calculate tokens earned
+                let tokens_earned = material.calculate_reward_points();
 
                 // Update submitter stats
                 let mut stats: RecyclingStats = env
@@ -599,6 +1214,9 @@ impl ScavengerContract {
                     .instance()
                     .set(&("stats", material.submitter.clone()), &stats);
 
+                // Update submitter's participant stats with tokens earned
+                Self::update_participant_stats(&env, &material.submitter, 0, tokens_earned);
+
                 results.push_back(material);
             }
         }
@@ -611,31 +1229,9 @@ impl ScavengerContract {
         env.storage().instance().get(&("stats", participant))
     }
 
-    // ========== Incentive Storage Functions ==========
-
-    /// Store an incentive record by ID
-    /// Internal helper function for efficient incentive storage
-    fn set_incentive(env: &Env, incentive_id: u64, incentive: &Incentive) {
-        let key = ("incentive", incentive_id);
-        env.storage().instance().set(&key, incentive);
-    }
-
-    /// Retrieve an incentive record by ID
-    /// Returns None if incentive doesn't exist
-    fn get_incentive(env: &Env, incentive_id: u64) -> Option<Incentive> {
-        let key = ("incentive", incentive_id);
-        env.storage().instance().get(&key)
-    }
-
-    /// Check if an incentive record exists
-    pub fn incentive_exists(env: Env, incentive_id: u64) -> bool {
-        let key = ("incentive", incentive_id);
-        env.storage().instance().has(&key)
-    }
-
     /// Get incentive by ID (public getter)
     pub fn get_incentive_by_id(env: Env, incentive_id: u64) -> Option<Incentive> {
-        Self::get_incentive(&env, incentive_id)
+        Self::get_incentive_internal(&env, incentive_id)
     }
 
     /// Get all incentive IDs created by a specific rewarder (manufacturer)
@@ -648,6 +1244,44 @@ impl ScavengerContract {
     pub fn get_incentives_by_waste_type(env: Env, waste_type: WasteType) -> Vec<u64> {
         let key = ("general_incentives", waste_type);
         env.storage().instance().get(&key).unwrap_or(Vec::new(&env))
+    }
+
+    /// Get all active incentives for a specific waste type, sorted by reward amount
+    /// Returns only active incentives, sorted in descending order by reward_points
+    pub fn get_incentives(env: Env, waste_type: WasteType) -> Vec<Incentive> {
+        // Get all incentive IDs for this waste type
+        let incentive_ids = Self::get_incentives_by_waste_type(env.clone(), waste_type);
+        
+        let mut active_incentives = Vec::new(&env);
+        
+        // Collect all active incentives
+        for incentive_id in incentive_ids.iter() {
+            if let Some(incentive) = Self::get_incentive_internal(&env, incentive_id) {
+                // Filter: only include active incentives
+                if incentive.active {
+                    active_incentives.push_back(incentive);
+                }
+            }
+        }
+        
+        // Sort by reward_points in descending order (highest rewards first)
+        // Using bubble sort since Soroban Vec doesn't have built-in sort
+        let len = active_incentives.len();
+        for i in 0..len {
+            for j in 0..(len - i - 1) {
+                let curr = active_incentives.get(j).unwrap();
+                let next = active_incentives.get(j + 1).unwrap();
+                
+                if curr.reward_points < next.reward_points {
+                    // Swap elements
+                    let temp = curr.clone();
+                    active_incentives.set(j, next);
+                    active_incentives.set(j + 1, temp);
+                }
+            }
+        }
+        
+        active_incentives
     }
 
     /// Create a new incentive
@@ -709,7 +1343,7 @@ impl ScavengerContract {
     pub fn deactivate_incentive(env: Env, incentive_id: u64, rewarder: Address) -> Incentive {
         rewarder.require_auth();
 
-        let mut incentive = Self::get_incentive(&env, incentive_id).expect("Incentive not found");
+        let mut incentive = Self::get_incentive_internal(&env, incentive_id).expect("Incentive not found");
 
         // Verify caller is the creator
         if incentive.rewarder != rewarder {
@@ -732,7 +1366,7 @@ impl ScavengerContract {
         claimer.require_auth();
 
         // Get material and verify it exists and is verified
-        let material = Self::get_waste(&env, material_id).expect("Material not found");
+        let material = Self::get_waste_internal(&env, material_id).expect("Material not found");
 
         if !material.verified {
             panic!("Material must be verified to claim incentive");
@@ -744,7 +1378,7 @@ impl ScavengerContract {
         }
 
         // Get incentive
-        let mut incentive = Self::get_incentive(&env, incentive_id).expect("Incentive not found");
+        let mut incentive = Self::get_incentive_internal(&env, incentive_id).expect("Incentive not found");
 
         // Verify waste types match
         if incentive.waste_type != material.waste_type {
@@ -771,163 +1405,9 @@ impl ScavengerContract {
 
         reward
     }
-
-    /// Create a new incentive program
-    /// Only manufacturers can create incentives
-    pub fn create_incentive(
-        env: Env,
-        manufacturer: Address,
-        waste_type: WasteType,
-        reward_amount: u64,
-    ) -> Incentive {
-        manufacturer.require_auth();
-
-        // Verify manufacturer has Manufacturer role
-        let manufacturer_key = (manufacturer.clone(),);
-        let participant: Participant = env
-            .storage()
-            .instance()
-            .get(&manufacturer_key)
-            .expect("Manufacturer not registered");
-
-        if !participant.role.can_manufacture() {
-            panic!("Only manufacturers can create incentives");
-        }
-
-        // Validate reward amount
-        if reward_amount == 0 {
-            panic!("Reward amount must be greater than zero");
-        }
-
-        // Generate next incentive ID
-        let incentive_id = Self::next_incentive_id(&env);
-
-        // Create incentive
-        let incentive = Incentive::new(
-            incentive_id,
-            manufacturer,
-            waste_type,
-            reward_amount,
-            env.ledger().timestamp(),
-        );
-
-        // Store incentive
-        Self::set_incentive(&env, incentive_id, &incentive);
-
-        incentive
-    }
-
-    /// Get incentive by ID
-    pub fn get_incentive(env: Env, incentive_id: u64) -> Option<Incentive> {
-        Self::get_incentive_internal(&env, incentive_id)
-    }
-
-    /// Check if an incentive exists
-    pub fn incentive_exists(env: Env, incentive_id: u64) -> bool {
-        let key = ("incentive", incentive_id);
-        env.storage().instance().has(&key)
-    }
-
-    /// Get multiple incentives by IDs (batch retrieval)
-    pub fn get_incentives_batch(
-        env: Env,
-        incentive_ids: soroban_sdk::Vec<u64>,
-    ) -> soroban_sdk::Vec<Option<Incentive>> {
-        let mut results = soroban_sdk::Vec::new(&env);
-        
-        for incentive_id in incentive_ids.iter() {
-            results.push_back(Self::get_incentive_internal(&env, incentive_id));
-        }
-        
-        results
-    }
-
-    /// Deactivate an incentive
-    /// Only the manufacturer who created the incentive can deactivate it
-    pub fn deactivate_incentive(
-        env: Env,
-        incentive_id: u64,
-        manufacturer: Address,
-    ) -> Incentive {
-        manufacturer.require_auth();
-
-        // Retrieve incentive
-        let mut incentive: Incentive = Self::get_incentive_internal(&env, incentive_id)
-            .expect("Incentive not found");
-
-        // Verify manufacturer matches
-        if incentive.manufacturer != manufacturer {
-            panic!("Only the incentive creator can modify this incentive");
-        }
-
-        // Deactivate
-        incentive.deactivate();
-        Self::set_incentive(&env, incentive_id, &incentive);
-
-        incentive
-    }
-
-    /// Activate an incentive
-    /// Only the manufacturer who created the incentive can activate it
-    pub fn activate_incentive(
-        env: Env,
-        incentive_id: u64,
-        manufacturer: Address,
-    ) -> Incentive {
-        manufacturer.require_auth();
-
-        // Retrieve incentive
-        let mut incentive: Incentive = Self::get_incentive_internal(&env, incentive_id)
-            .expect("Incentive not found");
-
-        // Verify manufacturer matches
-        if incentive.manufacturer != manufacturer {
-            panic!("Only the incentive creator can modify this incentive");
-        }
-
-        // Activate
-        incentive.activate();
-        Self::set_incentive(&env, incentive_id, &incentive);
-
-        incentive
-    }
-
-    /// Update incentive reward amount
-    /// Only the manufacturer who created the incentive can update it
-    pub fn update_incentive_reward(
-        env: Env,
-        incentive_id: u64,
-        manufacturer: Address,
-        new_reward_amount: u64,
-    ) -> Incentive {
-        manufacturer.require_auth();
-
-        // Validate new reward amount
-        if new_reward_amount == 0 {
-            panic!("Reward amount must be greater than zero");
-        }
-
-        // Retrieve incentive
-        let mut incentive: Incentive = Self::get_incentive_internal(&env, incentive_id)
-            .expect("Incentive not found");
-
-        // Verify manufacturer matches
-        if incentive.manufacturer != manufacturer {
-            panic!("Only the incentive creator can modify this incentive");
-        }
-
-        // Update reward amount
-        incentive.reward_amount = new_reward_amount;
-        Self::set_incentive(&env, incentive_id, &incentive);
-
-        incentive
-    }
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-    use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env};
+    // ========== Participant Tests ==========
 
     #[test]
     fn test_register_participant() {
@@ -941,10 +1421,26 @@ mod test {
         let user = Address::generate(&env);
         env.mock_all_auths();
 
-        let participant = client.register_participant(&user, &ParticipantRole::Recycler);
+        let name = soroban_sdk::Symbol::new(&env, "Alice");
+        let participant = client.register_participant(
+            &user,
+            &ParticipantRole::Recycler,
+            &name,
+            &40_748_817, // NYC latitude * 1e6
+            &-73_985_428, // NYC longitude * 1e6
+        );
 
         assert_eq!(participant.address, user);
         assert_eq!(participant.role, ParticipantRole::Recycler);
+
+        assert_eq!(participant.name, name);
+        assert_eq!(participant.latitude, 40_748_817);
+        assert_eq!(participant.longitude, -73_985_428);
+        assert!(participant.is_registered);
+        assert_eq!(participant.total_waste_processed, 0);
+        assert_eq!(participant.total_tokens_earned, 0);
+        assert!(participant.registered_at > 0);
+
         // Timestamp can be 0 in test environment
         assert!(participant.registered_at >= 0);
     }
@@ -984,6 +1480,7 @@ mod test {
 
         // Check registered user
         assert!(client.is_participant_registered(&user));
+
     }
 
     #[test]
@@ -995,11 +1492,21 @@ mod test {
         let user = Address::generate(&env);
         env.mock_all_auths();
 
-        client.register_participant(&user, &ParticipantRole::Collector);
+        let name = soroban_sdk::Symbol::new(&env, "Bob");
+        client.register_participant(
+            &user,
+            &ParticipantRole::Collector,
+            &name,
+            &51_507_351, // London latitude * 1e6
+            &-141_278, // London longitude * 1e6
+        );
 
         let participant = client.get_participant(&user);
         assert!(participant.is_some());
-        assert_eq!(participant.unwrap().role, ParticipantRole::Collector);
+        let p = participant.unwrap();
+        assert_eq!(p.role, ParticipantRole::Collector);
+        assert_eq!(p.name, name);
+        assert!(p.is_registered);
     }
 
     #[test]
@@ -1011,10 +1518,18 @@ mod test {
         let user = Address::generate(&env);
         env.mock_all_auths();
 
-        client.register_participant(&user, &ParticipantRole::Recycler);
+        let name = soroban_sdk::Symbol::new(&env, "Charlie");
+        client.register_participant(
+            &user,
+            &ParticipantRole::Recycler,
+            &name,
+            &0,
+            &0,
+        );
         let updated = client.update_role(&user, &ParticipantRole::Manufacturer);
 
         assert_eq!(updated.role, ParticipantRole::Manufacturer);
+        assert!(updated.is_registered);
     }
 
     #[test]
@@ -1028,9 +1543,10 @@ mod test {
         let manufacturer = Address::generate(&env);
         env.mock_all_auths();
 
-        client.register_participant(&recycler, &ParticipantRole::Recycler);
-        client.register_participant(&collector, &ParticipantRole::Collector);
-        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
+        client.register_participant(&collector, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer, &name, &0, &0);
 
         assert!(client.can_collect(&recycler));
         assert!(client.can_collect(&collector));
@@ -1047,8 +1563,9 @@ mod test {
         let manufacturer = Address::generate(&env);
         env.mock_all_auths();
 
-        client.register_participant(&recycler, &ParticipantRole::Recycler);
-        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer, &name, &0, &0);
 
         assert!(!client.can_manufacture(&recycler));
         assert!(client.can_manufacture(&manufacturer));
@@ -1065,9 +1582,10 @@ mod test {
         let user3 = Address::generate(&env);
         env.mock_all_auths();
 
-        client.register_participant(&user1, &ParticipantRole::Recycler);
-        client.register_participant(&user2, &ParticipantRole::Collector);
-        client.register_participant(&user3, &ParticipantRole::Manufacturer);
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user1, &ParticipantRole::Recycler, &name, &0, &0);
+        client.register_participant(&user2, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&user3, &ParticipantRole::Manufacturer, &name, &0, &0);
 
         let p1 = client.get_participant(&user1).unwrap();
         let p2 = client.get_participant(&user2).unwrap();
@@ -1123,6 +1641,10 @@ mod test {
         let user = Address::generate(&env);
         env.mock_all_auths();
 
+        // Register user first
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
+
         let description = String::from_str(&env, "Plastic bottles");
         let material = client.submit_material(&WasteType::PetPlastic, &5000, &user, &description);
 
@@ -1131,6 +1653,119 @@ mod test {
         assert_eq!(material.weight, 5000);
         assert_eq!(material.submitter, user);
         assert!(!material.verified);
+
+        // Check participant stats updated
+        let participant = client.get_participant(&user).unwrap();
+        assert_eq!(participant.total_waste_processed, 5000);
+        assert_eq!(participant.total_tokens_earned, 0); // Not verified yet
+    }
+
+    #[test]
+    fn test_recycle_waste() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let recycler = Address::generate(&env);
+        env.mock_all_auths();
+
+        client.register_participant(&recycler, &ParticipantRole::Recycler);
+
+        let waste_id = client.recycle_waste(
+            &WasteType::Plastic,
+            &2500,
+            &recycler,
+            &40_500_000,
+            &-74_000_000,
+        );
+
+        assert_eq!(waste_id, 1);
+    }
+
+    #[test]
+    fn test_transfer_waste_v2() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let recycler = Address::generate(&env);
+        let collector = Address::generate(&env);
+        env.mock_all_auths();
+
+        client.register_participant(&recycler, &ParticipantRole::Recycler);
+        client.register_participant(&collector, &ParticipantRole::Collector);
+
+        let waste_id = client.recycle_waste(
+            &WasteType::Metal,
+            &3000,
+            &recycler,
+            &40_500_000,
+            &-74_000_000,
+        );
+
+        let transfer = client.transfer_waste_v2(
+            &waste_id,
+            &recycler,
+            &collector,
+            &40_600_000,
+            &-74_100_000,
+        );
+
+        assert_eq!(transfer.waste_id, waste_id);
+        assert_eq!(transfer.from, recycler);
+        assert_eq!(transfer.to, collector);
+    }
+
+    #[test]
+    fn test_transfer_collected_waste() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let collector = Address::generate(&env);
+        let manufacturer = Address::generate(&env);
+        env.mock_all_auths();
+
+        client.register_participant(&collector, &ParticipantRole::Collector);
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+
+        let waste_id = client.transfer_collected_waste(
+            &WasteType::Plastic,
+            &collector,
+            &manufacturer,
+            &41_000_000,
+            &-73_500_000,
+            &soroban_sdk::symbol_short!("bulk"),
+        );
+
+        assert_eq!(waste_id, 1);
+    }
+
+    #[test]
+    fn test_confirm_waste_details() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let recycler = Address::generate(&env);
+        let verifier = Address::generate(&env);
+        env.mock_all_auths();
+
+        client.register_participant(&recycler, &ParticipantRole::Recycler);
+        client.register_participant(&verifier, &ParticipantRole::Collector);
+
+        let waste_id = client.recycle_waste(
+            &WasteType::Glass,
+            &1500,
+            &recycler,
+            &40_700_000,
+            &-73_900_000,
+        );
+
+        let waste = client.confirm_waste_details(&waste_id, &verifier);
+
+        assert!(waste.is_confirmed);
+        assert_eq!(waste.confirmer, verifier);
     }
 
     #[test]
@@ -1141,6 +1776,10 @@ mod test {
 
         let user = Address::generate(&env);
         env.mock_all_auths();
+
+        // Register user first
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
 
         let description = String::from_str(&env, "Metal cans");
         client.submit_material(&WasteType::Metal, &3000, &user, &description);
@@ -1160,8 +1799,10 @@ mod test {
         let recycler = Address::generate(&env);
         env.mock_all_auths();
 
-        // Register recycler
-        client.register_participant(&recycler, &ParticipantRole::Recycler);
+        // Register both users
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&submitter, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
 
         // Submit material
         let description = String::from_str(&env, "Glass bottles");
@@ -1170,6 +1811,11 @@ mod test {
         // Verify material
         let verified = client.verify_material(&1, &recycler);
         assert!(verified.verified);
+
+        // Check submitter's tokens were updated
+        let participant = client.get_participant(&submitter).unwrap();
+        assert_eq!(participant.total_waste_processed, 2000);
+        assert_eq!(participant.total_tokens_earned, 20); // 2kg * 2 * 10
     }
 
     #[test]
@@ -1180,6 +1826,10 @@ mod test {
 
         let user = Address::generate(&env);
         env.mock_all_auths();
+
+        // Register user first
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
 
         // Submit multiple materials
         let desc1 = String::from_str(&env, "Paper");
@@ -1195,6 +1845,10 @@ mod test {
         assert!(client.get_material(&2).is_some());
         assert!(client.get_material(&3).is_some());
         assert!(client.get_material(&4).is_none());
+
+        // Check participant stats
+        let participant = client.get_participant(&user).unwrap();
+        assert_eq!(participant.total_waste_processed, 6000);
     }
 
     #[test]
@@ -1205,6 +1859,10 @@ mod test {
 
         let user = Address::generate(&env);
         env.mock_all_auths();
+
+        // Register user first
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
 
         // Submit materials
         let desc = String::from_str(&env, "Test");
@@ -1229,8 +1887,10 @@ mod test {
         let recycler = Address::generate(&env);
         env.mock_all_auths();
 
-        // Register recycler
-        client.register_participant(&recycler, &ParticipantRole::Recycler);
+        // Register both users
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&submitter, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
 
         // Submit and verify material
         let desc = String::from_str(&env, "Metal cans");
@@ -1253,6 +1913,10 @@ mod test {
 
         let user = Address::generate(&env);
         env.mock_all_auths();
+
+        // Register user first
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
 
         let desc = String::from_str(&env, "Test");
 
@@ -3126,6 +3790,360 @@ mod test {
         // Manufacturer 2 tries to deactivate - should panic
         client.deactivate_incentive(&1, &manufacturer2);
 
+    }
+}
+
+
+
+    // Participant-specific tests
+    #[test]
+    fn test_participant_persistence() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Alice");
+        let participant = client.register_participant(
+            &user,
+            &ParticipantRole::Recycler,
+            &name,
+            &40_748_817,
+            &-73_985_428,
+        );
+
+        // Retrieve and verify persistence
+        let retrieved = client.get_participant(&user).unwrap();
+        assert_eq!(retrieved.address, participant.address);
+        assert_eq!(retrieved.role, participant.role);
+        assert_eq!(retrieved.name, participant.name);
+        assert_eq!(retrieved.latitude, participant.latitude);
+        assert_eq!(retrieved.longitude, participant.longitude);
+        assert_eq!(retrieved.is_registered, participant.is_registered);
+        assert_eq!(retrieved.total_waste_processed, participant.total_waste_processed);
+        assert_eq!(retrieved.total_tokens_earned, participant.total_tokens_earned);
+        assert_eq!(retrieved.registered_at, participant.registered_at);
+    }
+
+    #[test]
+    fn test_participant_initialization() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Bob");
+        let participant = client.register_participant(
+            &user,
+            &ParticipantRole::Collector,
+            &name,
+            &51_507_351,
+            &-141_278,
+        );
+
+        // Verify correct initialization
+        assert!(participant.is_registered);
+        assert_eq!(participant.total_waste_processed, 0);
+        assert_eq!(participant.total_tokens_earned, 0);
+        assert!(participant.registered_at > 0);
+    }
+
+    #[test]
+    fn test_role_based_access_enforcement() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let collector = Address::generate(&env);
+        let manufacturer = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&collector, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer, &name, &0, &0);
+
+        // Collector can collect but not manufacture
+        assert!(client.can_collect(&collector));
+        assert!(!client.can_manufacture(&collector));
+
+        // Manufacturer can manufacture but not collect
+        assert!(!client.can_collect(&manufacturer));
+        assert!(client.can_manufacture(&manufacturer));
+    }
+
+    #[test]
+    fn test_participant_stats_update() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let submitter = Address::generate(&env);
+        let recycler = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&submitter, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
+
+        // Submit material
+        let desc = String::from_str(&env, "Test material");
+        client.submit_material(&WasteType::Metal, &5000, &submitter, &desc);
+
+        // Check waste processed updated
+        let participant = client.get_participant(&submitter).unwrap();
+        assert_eq!(participant.total_waste_processed, 5000);
+        assert_eq!(participant.total_tokens_earned, 0);
+
+        // Verify material
+        client.verify_material(&1, &recycler);
+
+        // Check tokens earned updated
+        let participant = client.get_participant(&submitter).unwrap();
+        assert_eq!(participant.total_waste_processed, 5000);
+        assert_eq!(participant.total_tokens_earned, 250); // 5kg * 5 * 10
+    }
+
+    #[test]
+    fn test_participant_stats_overflow_protection() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
+
+        // Submit multiple materials
+        let desc = String::from_str(&env, "Test");
+        for _ in 0..10 {
+            client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+        }
+
+        // Check stats accumulated correctly
+        let participant = client.get_participant(&user).unwrap();
+        assert_eq!(participant.total_waste_processed, 10000);
+    }
+
+    #[test]
+    fn test_deregister_participant() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
+
+        // Verify registered
+        assert!(client.can_collect(&user));
+
+        // Deregister
+        let deregistered = client.deregister_participant(&user);
+        assert!(!deregistered.is_registered);
+
+        // Verify can no longer perform actions
+        assert!(!client.can_collect(&user));
+    }
+
+    #[test]
+    fn test_update_location() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
+
+        // Update location
+        let updated = client.update_location(&user, &48_856_613, &2_352_222); // Paris
+        assert_eq!(updated.latitude, 48_856_613);
+        assert_eq!(updated.longitude, 2_352_222);
+
+        // Verify persistence
+        let retrieved = client.get_participant(&user).unwrap();
+        assert_eq!(retrieved.latitude, 48_856_613);
+        assert_eq!(retrieved.longitude, 2_352_222);
+    }
+
+    #[test]
+    #[should_panic(expected = "Participant not found")]
+    fn test_submit_material_unregistered_user() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let desc = String::from_str(&env, "Test");
+        client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+    }
+
+    #[test]
+    #[should_panic(expected = "Participant is not registered")]
+    fn test_update_role_deregistered_user() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
+        client.deregister_participant(&user);
+
+        // Should panic
+        client.update_role(&user, &ParticipantRole::Recycler);
+    }
+
+    #[test]
+    #[should_panic(expected = "Verifier is not registered")]
+    fn test_verify_material_deregistered_verifier() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let submitter = Address::generate(&env);
+        let recycler = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&submitter, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
+
+        // Submit material
+        let desc = String::from_str(&env, "Test");
+        client.submit_material(&WasteType::Paper, &1000, &submitter, &desc);
+
+        // Deregister recycler
+        client.deregister_participant(&recycler);
+
+        // Should panic
+        client.verify_material(&1, &recycler);
+    }
+
+    #[test]
+    fn test_batch_operations_update_participant_stats() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let submitter = Address::generate(&env);
+        let recycler = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&submitter, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
+
+        // Batch submit
+        let mut materials = soroban_sdk::Vec::new(&env);
+        materials.push_back((WasteType::Paper, 1000u64, String::from_str(&env, "Batch 1")));
+        materials.push_back((WasteType::Plastic, 2000u64, String::from_str(&env, "Batch 2")));
+        materials.push_back((WasteType::Metal, 3000u64, String::from_str(&env, "Batch 3")));
+
+        client.submit_materials_batch(&materials, &submitter);
+
+        // Check participant stats
+        let participant = client.get_participant(&submitter).unwrap();
+        assert_eq!(participant.total_waste_processed, 6000);
+
+        // Batch verify
+        let mut ids = soroban_sdk::Vec::new(&env);
+        ids.push_back(1);
+        ids.push_back(2);
+        ids.push_back(3);
+
+        client.verify_materials_batch(&ids, &recycler);
+
+        // Check tokens earned
+        let participant = client.get_participant(&submitter).unwrap();
+        assert_eq!(participant.total_waste_processed, 6000);
+        // 1kg*1*10 + 2kg*2*10 + 3kg*5*10 = 10 + 40 + 150 = 200
+        assert_eq!(participant.total_tokens_earned, 200);
+    }
+
+    #[test]
+    fn test_participant_storage_deterministic() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        
+        // Register twice with same data
+        let p1 = client.register_participant(
+            &user,
+            &ParticipantRole::Recycler,
+            &name,
+            &12345678,
+            &-87654321,
+        );
+
+        let p2 = client.register_participant(
+            &user,
+            &ParticipantRole::Recycler,
+            &name,
+            &12345678,
+            &-87654321,
+        );
+
+        // Should overwrite with same values
+        assert_eq!(p1.role, p2.role);
+        assert_eq!(p1.name, p2.name);
+        assert_eq!(p1.latitude, p2.latitude);
+        assert_eq!(p1.longitude, p2.longitude);
+    }
+
+    #[test]
+    fn test_multiple_participants_independent_stats() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user1 = Address::generate(&env);
+        let user2 = Address::generate(&env);
+        let recycler = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user1, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&user2, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
+
+        // User1 submits
+        let desc = String::from_str(&env, "Test");
+        client.submit_material(&WasteType::Paper, &1000, &user1, &desc);
+        client.verify_material(&1, &recycler);
+
+        // User2 submits
+        client.submit_material(&WasteType::Metal, &5000, &user2, &desc);
+        client.verify_material(&2, &recycler);
+
+        // Check independent stats
+        let p1 = client.get_participant(&user1).unwrap();
+        let p2 = client.get_participant(&user2).unwrap();
+
+        assert_eq!(p1.total_waste_processed, 1000);
+        assert_eq!(p1.total_tokens_earned, 10); // 1kg * 1 * 10
+
+        assert_eq!(p2.total_waste_processed, 5000);
+        assert_eq!(p2.total_tokens_earned, 250); // 5kg * 5 * 10
     }
 }
 

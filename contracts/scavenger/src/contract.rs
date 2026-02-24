@@ -2,7 +2,7 @@ use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
 
 use crate::events;
 use crate::storage::Storage;
-use crate::types::{Incentive, Material, Participant, Role, WasteTransfer, WasteType};
+use crate::types::{GlobalMetrics, Incentive, Material, Participant, Role, WasteTransfer, WasteType};
 
 #[contract]
 pub struct ScavengerContract;
@@ -64,6 +64,22 @@ impl ScavengerContract {
     pub fn get_total_earned(env: &Env) -> i128 {
         Storage::get_total_earned(env)
     }
+
+    // ========== Global Metrics (Issue #55) ==========
+
+    /// Retrieve global contract metrics (total wastes and total tokens earned)
+    pub fn get_metrics(env: &Env) -> GlobalMetrics {
+        // We use the Material counter (MAT_CNT) to determine total waste items logged.
+        // This calculates the metric efficiently from storage without iteration.
+        let waste_count = env.storage().instance().get(&soroban_sdk::symbol_short!("MAT_CNT")).unwrap_or(0);
+        
+        GlobalMetrics {
+            total_wastes_count: waste_count,
+            total_tokens_earned: Storage::get_total_earned(env),
+        }
+    }
+
+    // ===============================================
 
     /// Update the token address (admin only)
     pub fn update_token_address(env: &Env, admin: Address, new_address: Address) {

@@ -7,7 +7,7 @@ description = "Stellar Soroban smart contract for the Scavngr recycling platform
 license = "MIT"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 soroban-sdk = { workspace = true }
