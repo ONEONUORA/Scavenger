@@ -321,6 +321,197 @@ impl Material {
     }
 }
 
+/// Represents a waste item in the recycling system
+/// This is the main struct that tracks waste throughout its lifecycle
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Waste {
+    /// Unique identifier for the waste item
+    pub waste_id: u128,
+    /// Type of waste material
+    pub waste_type: WasteType,
+    /// Weight of the waste in grams
+    pub weight: u128,
+    /// Current owner of the waste
+    pub current_owner: Address,
+    /// Latitude coordinate (scaled by 1e6 for precision)
+    pub latitude: i128,
+    /// Longitude coordinate (scaled by 1e6 for precision)
+    pub longitude: i128,
+    /// Timestamp when the waste was recycled (0 if not yet recycled)
+    pub recycled_timestamp: u64,
+    /// Whether the waste is currently active in the system
+    pub is_active: bool,
+    /// Whether the waste has been confirmed/verified
+    pub is_confirmed: bool,
+    /// Address of the confirmer/verifier
+    pub confirmer: Address,
+}
+
+impl Waste {
+    /// Creates a new Waste instance with all fields
+    pub fn new(
+        waste_id: u128,
+        waste_type: WasteType,
+        weight: u128,
+        current_owner: Address,
+        latitude: i128,
+        longitude: i128,
+        recycled_timestamp: u64,
+        is_active: bool,
+        is_confirmed: bool,
+        confirmer: Address,
+    ) -> Self {
+        Self {
+            waste_id,
+            waste_type,
+            weight,
+            current_owner,
+            latitude,
+            longitude,
+            recycled_timestamp,
+            is_active,
+            is_confirmed,
+            confirmer,
+        }
+    }
+
+    /// Validates that the waste has valid coordinates
+    pub fn has_valid_coordinates(&self) -> bool {
+        let max_lat = 90_000_000i128;
+        let max_lon = 180_000_000i128;
+        
+        self.latitude >= -max_lat 
+            && self.latitude <= max_lat
+            && self.longitude >= -max_lon
+            && self.longitude <= max_lon
+    }
+
+    /// Checks if the waste has been recycled
+    pub fn is_recycled(&self) -> bool {
+        self.recycled_timestamp > 0
+    }
+
+    /// Checks if the waste meets minimum weight requirement (100g)
+    pub fn meets_minimum_weight(&self) -> bool {
+        self.weight >= 100
+    }
+
+    /// Marks the waste as recycled with the given timestamp
+    pub fn mark_recycled(&mut self, timestamp: u64) {
+        self.recycled_timestamp = timestamp;
+    }
+
+    /// Confirms the waste with the given confirmer
+    pub fn confirm(&mut self, confirmer: Address) {
+        self.is_confirmed = true;
+        self.confirmer = confirmer;
+    }
+
+    /// Deactivates the waste
+    pub fn deactivate(&mut self) {
+        self.is_active = false;
+    }
+
+    /// Transfers ownership to a new owner
+    pub fn transfer_to(&mut self, new_owner: Address) {
+        self.current_owner = new_owner;
+    }
+
+    /// Updates the location of the waste
+    pub fn update_location(&mut self, latitude: i128, longitude: i128) {
+        self.latitude = latitude;
+        self.longitude = longitude;
+    }
+}
+
+/// Builder pattern for constructing Waste instances
+/// Provides a fluent API for creating waste with optional fields
+pub struct WasteBuilder {
+    waste_id: u128,
+    waste_type: WasteType,
+    weight: u128,
+    current_owner: Address,
+    latitude: i128,
+    longitude: i128,
+    recycled_timestamp: u64,
+    is_active: bool,
+    is_confirmed: bool,
+    confirmer: Option<Address>,
+}
+
+impl WasteBuilder {
+    /// Creates a new WasteBuilder with required fields
+    pub fn new(
+        waste_id: u128,
+        waste_type: WasteType,
+        weight: u128,
+        current_owner: Address,
+    ) -> Self {
+        Self {
+            waste_id,
+            waste_type,
+            weight,
+            current_owner: current_owner.clone(),
+            latitude: 0,
+            longitude: 0,
+            recycled_timestamp: 0,
+            is_active: true,
+            is_confirmed: false,
+            confirmer: Some(current_owner),
+        }
+    }
+
+    /// Sets the location coordinates
+    pub fn location(mut self, latitude: i128, longitude: i128) -> Self {
+        self.latitude = latitude;
+        self.longitude = longitude;
+        self
+    }
+
+    /// Sets the recycled timestamp
+    pub fn recycled_at(mut self, timestamp: u64) -> Self {
+        self.recycled_timestamp = timestamp;
+        self
+    }
+
+    /// Sets the active status
+    pub fn active(mut self, is_active: bool) -> Self {
+        self.is_active = is_active;
+        self
+    }
+
+    /// Sets the confirmed status and confirmer
+    pub fn confirmed(mut self, confirmer: Address) -> Self {
+        self.is_confirmed = true;
+        self.confirmer = Some(confirmer);
+        self
+    }
+
+    /// Sets the confirmer address
+    pub fn confirmer(mut self, confirmer: Address) -> Self {
+        self.confirmer = Some(confirmer);
+        self
+    }
+
+    /// Builds the Waste instance
+    pub fn build(self) -> Waste {
+        let confirmer = self.confirmer.unwrap_or_else(|| self.current_owner.clone());
+        Waste {
+            waste_id: self.waste_id,
+            waste_type: self.waste_type,
+            weight: self.weight,
+            current_owner: self.current_owner,
+            latitude: self.latitude,
+            longitude: self.longitude,
+            recycled_timestamp: self.recycled_timestamp,
+            is_active: self.is_active,
+            is_confirmed: self.is_confirmed,
+            confirmer,
+        }
+    }
+}
+
 /// Represents a waste transfer in the supply chain
 /// Tracks the movement of waste materials between participants
 #[contracttype]
