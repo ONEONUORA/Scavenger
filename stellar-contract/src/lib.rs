@@ -17,6 +17,12 @@ const OWNER_PCT: Symbol = symbol_short!("OWN_PCT");
 pub struct Participant {
     pub address: Address,
     pub role: ParticipantRole,
+    pub name: soroban_sdk::Symbol,
+    pub latitude: i128,
+    pub longitude: i128,
+    pub is_registered: bool,
+    pub total_waste_processed: u128,
+    pub total_tokens_earned: u128,
     pub registered_at: u64,
 }
 
@@ -169,8 +175,19 @@ impl ScavengerContract {
     }
 
     /// Register a new participant with a specific role
+
+    pub fn register_participant(
+        env: Env,
+        address: Address,
+        role: ParticipantRole,
+        name: soroban_sdk::Symbol,
+        latitude: i128,
+        longitude: i128,
+    ) -> Participant {
+
     /// Prevents duplicate registrations
     pub fn register_participant(env: Env, address: Address, role: ParticipantRole) -> Participant {
+
         address.require_auth();
 
         // Check if already registered
@@ -181,6 +198,12 @@ impl ScavengerContract {
         let participant = Participant {
             address: address.clone(),
             role,
+            name,
+            latitude,
+            longitude,
+            is_registered: true,
+            total_waste_processed: 0,
+            total_tokens_earned: 0,
             registered_at: env.ledger().timestamp(),
         };
 
@@ -188,6 +211,43 @@ impl ScavengerContract {
         Self::set_participant(&env, &address, &participant);
 
         participant
+    }
+
+    /// Update participant statistics after processing waste
+    /// Uses checked arithmetic to prevent overflow
+    fn update_participant_stats(
+        env: &Env,
+        address: &Address,
+        waste_weight: u64,
+        tokens_earned: u64,
+    ) {
+        let key = (address.clone(),);
+        if let Some(mut participant) = env.storage().instance().get::<_, Participant>(&key) {
+            // Use checked arithmetic to prevent overflow
+            participant.total_waste_processed = participant
+                .total_waste_processed
+                .checked_add(waste_weight as u128)
+                .expect("Overflow in total_waste_processed");
+            
+            participant.total_tokens_earned = participant
+                .total_tokens_earned
+                .checked_add(tokens_earned as u128)
+                .expect("Overflow in total_tokens_earned");
+            
+            env.storage().instance().set(&key, &participant);
+        }
+    }
+
+    /// Validate that a participant is registered before allowing restricted actions
+    fn require_registered(env: &Env, address: &Address) {
+        let key = (address.clone(),);
+        let participant: Option<Participant> = env.storage().instance().get(&key);
+        
+        match participant {
+            Some(p) if p.is_registered => {},
+            Some(_) => panic!("Participant is not registered"),
+            None => panic!("Participant not found"),
+        }
     }
 
     /// Store a waste record by ID
@@ -285,11 +345,61 @@ impl ScavengerContract {
         let mut participant: Participant =
             Self::get_participant(env.clone(), address.clone()).expect("Participant not found");
 
+        // Validate participant is registered
+        if !participant.is_registered {
+            panic!("Participant is not registered");
+        }
+
         participant.role = new_role;
         Self::set_participant(&env, &address, &participant);
 
         participant
     }
+
+
+    /// Deregister a participant (sets is_registered to false)
+    pub fn deregister_participant(env: Env, address: Address) -> Participant {
+        address.require_auth();
+
+        let key = (address.clone(),);
+        let mut participant: Participant = env
+            .storage()
+            .instance()
+            .get(&key)
+            .expect("Participant not found");
+
+        participant.is_registered = false;
+        env.storage().instance().set(&key, &participant);
+
+        participant
+    }
+
+    /// Update participant location
+    pub fn update_location(
+        env: Env,
+        address: Address,
+        latitude: i128,
+        longitude: i128,
+    ) -> Participant {
+        address.require_auth();
+
+        let key = (address.clone(),);
+        let mut participant: Participant = env
+            .storage()
+            .instance()
+            .get(&key)
+            .expect("Participant not found");
+
+        // Validate participant is registered
+        if !participant.is_registered {
+            panic!("Participant is not registered");
+        }
+
+        participant.latitude = latitude;
+        participant.longitude = longitude;
+        env.storage().instance().set(&key, &participant);
+
+        participant
 
     // ========== Waste Transfer History Functions ==========
 
@@ -380,13 +490,14 @@ impl ScavengerContract {
         // This would need to iterate through all wastes
         // For now, returning empty as this requires additional indexing
         Vec::new(&env)
+
     }
 
     /// Validate if a participant can perform a specific action
     pub fn can_collect(env: Env, address: Address) -> bool {
         let key = (address,);
         if let Some(participant) = env.storage().instance().get::<_, Participant>(&key) {
-            participant.role.can_collect_materials()
+            participant.is_registered && participant.role.can_collect_materials()
         } else {
             false
         }
@@ -396,7 +507,7 @@ impl ScavengerContract {
     pub fn can_manufacture(env: Env, address: Address) -> bool {
         let key = (address,);
         if let Some(participant) = env.storage().instance().get::<_, Participant>(&key) {
-            participant.role.can_manufacture()
+            participant.is_registered && participant.role.can_manufacture()
         } else {
             false
         }
@@ -411,6 +522,9 @@ impl ScavengerContract {
         description: String,
     ) -> Material {
         submitter.require_auth();
+
+        // Validate submitter is registered
+        Self::require_registered(&env, &submitter);
 
         // Get next waste ID using the new storage system
         let waste_id = Self::next_waste_id(&env);
@@ -436,7 +550,10 @@ impl ScavengerContract {
             .unwrap_or_else(|| RecyclingStats::new(submitter.clone()));
 
         stats.record_submission(&material);
-        env.storage().instance().set(&("stats", submitter), &stats);
+        env.storage().instance().set(&("stats", submitter.clone()), &stats);
+
+        // Update participant stats
+        Self::update_participant_stats(&env, &submitter, weight, 0);
 
         material
     }
@@ -723,6 +840,9 @@ impl ScavengerContract {
     ) -> soroban_sdk::Vec<Material> {
         submitter.require_auth();
 
+        // Validate submitter is registered
+        Self::require_registered(&env, &submitter);
+
         let mut results = soroban_sdk::Vec::new(&env);
         let timestamp = env.ledger().timestamp();
 
@@ -732,6 +852,8 @@ impl ScavengerContract {
             .instance()
             .get(&("stats", submitter.clone()))
             .unwrap_or_else(|| RecyclingStats::new(submitter.clone()));
+
+        let mut total_weight: u64 = 0;
 
         // Process each material
         for item in materials.iter() {
@@ -750,10 +872,16 @@ impl ScavengerContract {
             Self::set_waste(&env, waste_id, &material);
             stats.record_submission(&material);
             results.push_back(material);
+            
+            // Accumulate weight with overflow check
+            total_weight = total_weight.checked_add(weight).expect("Overflow in batch weight");
         }
 
         // Update stats once at the end
-        env.storage().instance().set(&("stats", submitter), &stats);
+        env.storage().instance().set(&("stats", submitter.clone()), &stats);
+
+        // Update participant stats
+        Self::update_participant_stats(&env, &submitter, total_weight, 0);
 
         results
     }
@@ -815,13 +943,17 @@ impl ScavengerContract {
     pub fn verify_material(env: Env, material_id: u64, verifier: Address) -> Material {
         verifier.require_auth();
 
-        // Check if verifier is a recycler
+        // Check if verifier is a recycler and is registered
         let verifier_key = (verifier.clone(),);
         let participant: Participant = env
             .storage()
             .instance()
             .get(&verifier_key)
             .expect("Verifier not registered");
+
+        if !participant.is_registered {
+            panic!("Verifier is not registered");
+        }
 
         if !participant.role.can_process_recyclables() {
             panic!("Only recyclers can verify materials");
@@ -833,6 +965,9 @@ impl ScavengerContract {
 
         material.verify();
         Self::set_waste(&env, material_id, &material);
+
+        // Calculate tokens earned
+        let tokens_earned = material.calculate_reward_points();
 
         // Update submitter stats
         let mut stats: RecyclingStats = env
@@ -846,6 +981,9 @@ impl ScavengerContract {
             .instance()
             .set(&("stats", material.submitter.clone()), &stats);
 
+        // Update submitter's participant stats with tokens earned
+        Self::update_participant_stats(&env, &material.submitter, 0, tokens_earned);
+
         material
     }
 
@@ -857,13 +995,17 @@ impl ScavengerContract {
     ) -> soroban_sdk::Vec<Material> {
         verifier.require_auth();
 
-        // Check if verifier is a recycler
+        // Check if verifier is a recycler and is registered
         let verifier_key = (verifier.clone(),);
         let participant: Participant = env
             .storage()
             .instance()
             .get(&verifier_key)
             .expect("Verifier not registered");
+
+        if !participant.is_registered {
+            panic!("Verifier is not registered");
+        }
 
         if !participant.role.can_process_recyclables() {
             panic!("Only recyclers can verify materials");
@@ -876,6 +1018,9 @@ impl ScavengerContract {
                 material.verify();
                 Self::set_waste(&env, material_id, &material);
 
+                // Calculate tokens earned
+                let tokens_earned = material.calculate_reward_points();
+
                 // Update submitter stats
                 let mut stats: RecyclingStats = env
                     .storage()
@@ -887,6 +1032,9 @@ impl ScavengerContract {
                 env.storage()
                     .instance()
                     .set(&("stats", material.submitter.clone()), &stats);
+
+                // Update submitter's participant stats with tokens earned
+                Self::update_participant_stats(&env, &material.submitter, 0, tokens_earned);
 
                 results.push_back(material);
             }
@@ -1092,10 +1240,26 @@ impl ScavengerContract {
         let user = Address::generate(&env);
         env.mock_all_auths();
 
-        let participant = client.register_participant(&user, &ParticipantRole::Recycler);
+        let name = soroban_sdk::Symbol::new(&env, "Alice");
+        let participant = client.register_participant(
+            &user,
+            &ParticipantRole::Recycler,
+            &name,
+            &40_748_817, // NYC latitude * 1e6
+            &-73_985_428, // NYC longitude * 1e6
+        );
 
         assert_eq!(participant.address, user);
         assert_eq!(participant.role, ParticipantRole::Recycler);
+
+        assert_eq!(participant.name, name);
+        assert_eq!(participant.latitude, 40_748_817);
+        assert_eq!(participant.longitude, -73_985_428);
+        assert!(participant.is_registered);
+        assert_eq!(participant.total_waste_processed, 0);
+        assert_eq!(participant.total_tokens_earned, 0);
+        assert!(participant.registered_at > 0);
+
         // Timestamp can be 0 in test environment
         assert!(participant.registered_at >= 0);
     }
@@ -1135,6 +1299,7 @@ impl ScavengerContract {
 
         // Check registered user
         assert!(client.is_participant_registered(&user));
+
     }
 
     #[test]
@@ -1146,11 +1311,21 @@ impl ScavengerContract {
         let user = Address::generate(&env);
         env.mock_all_auths();
 
-        client.register_participant(&user, &ParticipantRole::Collector);
+        let name = soroban_sdk::Symbol::new(&env, "Bob");
+        client.register_participant(
+            &user,
+            &ParticipantRole::Collector,
+            &name,
+            &51_507_351, // London latitude * 1e6
+            &-141_278, // London longitude * 1e6
+        );
 
         let participant = client.get_participant(&user);
         assert!(participant.is_some());
-        assert_eq!(participant.unwrap().role, ParticipantRole::Collector);
+        let p = participant.unwrap();
+        assert_eq!(p.role, ParticipantRole::Collector);
+        assert_eq!(p.name, name);
+        assert!(p.is_registered);
     }
 
     #[test]
@@ -1162,10 +1337,18 @@ impl ScavengerContract {
         let user = Address::generate(&env);
         env.mock_all_auths();
 
-        client.register_participant(&user, &ParticipantRole::Recycler);
+        let name = soroban_sdk::Symbol::new(&env, "Charlie");
+        client.register_participant(
+            &user,
+            &ParticipantRole::Recycler,
+            &name,
+            &0,
+            &0,
+        );
         let updated = client.update_role(&user, &ParticipantRole::Manufacturer);
 
         assert_eq!(updated.role, ParticipantRole::Manufacturer);
+        assert!(updated.is_registered);
     }
 
     #[test]
@@ -1179,9 +1362,10 @@ impl ScavengerContract {
         let manufacturer = Address::generate(&env);
         env.mock_all_auths();
 
-        client.register_participant(&recycler, &ParticipantRole::Recycler);
-        client.register_participant(&collector, &ParticipantRole::Collector);
-        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
+        client.register_participant(&collector, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer, &name, &0, &0);
 
         assert!(client.can_collect(&recycler));
         assert!(client.can_collect(&collector));
@@ -1198,8 +1382,9 @@ impl ScavengerContract {
         let manufacturer = Address::generate(&env);
         env.mock_all_auths();
 
-        client.register_participant(&recycler, &ParticipantRole::Recycler);
-        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer, &name, &0, &0);
 
         assert!(!client.can_manufacture(&recycler));
         assert!(client.can_manufacture(&manufacturer));
@@ -1216,9 +1401,10 @@ impl ScavengerContract {
         let user3 = Address::generate(&env);
         env.mock_all_auths();
 
-        client.register_participant(&user1, &ParticipantRole::Recycler);
-        client.register_participant(&user2, &ParticipantRole::Collector);
-        client.register_participant(&user3, &ParticipantRole::Manufacturer);
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user1, &ParticipantRole::Recycler, &name, &0, &0);
+        client.register_participant(&user2, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&user3, &ParticipantRole::Manufacturer, &name, &0, &0);
 
         let p1 = client.get_participant(&user1).unwrap();
         let p2 = client.get_participant(&user2).unwrap();
@@ -1274,6 +1460,10 @@ impl ScavengerContract {
         let user = Address::generate(&env);
         env.mock_all_auths();
 
+        // Register user first
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
+
         let description = String::from_str(&env, "Plastic bottles");
         let material = client.submit_material(&WasteType::PetPlastic, &5000, &user, &description);
 
@@ -1282,6 +1472,11 @@ impl ScavengerContract {
         assert_eq!(material.weight, 5000);
         assert_eq!(material.submitter, user);
         assert!(!material.verified);
+
+        // Check participant stats updated
+        let participant = client.get_participant(&user).unwrap();
+        assert_eq!(participant.total_waste_processed, 5000);
+        assert_eq!(participant.total_tokens_earned, 0); // Not verified yet
     }
 
     #[test]
@@ -1401,6 +1596,10 @@ impl ScavengerContract {
         let user = Address::generate(&env);
         env.mock_all_auths();
 
+        // Register user first
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
+
         let description = String::from_str(&env, "Metal cans");
         client.submit_material(&WasteType::Metal, &3000, &user, &description);
 
@@ -1419,8 +1618,10 @@ impl ScavengerContract {
         let recycler = Address::generate(&env);
         env.mock_all_auths();
 
-        // Register recycler
-        client.register_participant(&recycler, &ParticipantRole::Recycler);
+        // Register both users
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&submitter, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
 
         // Submit material
         let description = String::from_str(&env, "Glass bottles");
@@ -1429,6 +1630,11 @@ impl ScavengerContract {
         // Verify material
         let verified = client.verify_material(&1, &recycler);
         assert!(verified.verified);
+
+        // Check submitter's tokens were updated
+        let participant = client.get_participant(&submitter).unwrap();
+        assert_eq!(participant.total_waste_processed, 2000);
+        assert_eq!(participant.total_tokens_earned, 20); // 2kg * 2 * 10
     }
 
     #[test]
@@ -1439,6 +1645,10 @@ impl ScavengerContract {
 
         let user = Address::generate(&env);
         env.mock_all_auths();
+
+        // Register user first
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
 
         // Submit multiple materials
         let desc1 = String::from_str(&env, "Paper");
@@ -1454,6 +1664,10 @@ impl ScavengerContract {
         assert!(client.get_material(&2).is_some());
         assert!(client.get_material(&3).is_some());
         assert!(client.get_material(&4).is_none());
+
+        // Check participant stats
+        let participant = client.get_participant(&user).unwrap();
+        assert_eq!(participant.total_waste_processed, 6000);
     }
 
     #[test]
@@ -1464,6 +1678,10 @@ impl ScavengerContract {
 
         let user = Address::generate(&env);
         env.mock_all_auths();
+
+        // Register user first
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
 
         // Submit materials
         let desc = String::from_str(&env, "Test");
@@ -1488,8 +1706,10 @@ impl ScavengerContract {
         let recycler = Address::generate(&env);
         env.mock_all_auths();
 
-        // Register recycler
-        client.register_participant(&recycler, &ParticipantRole::Recycler);
+        // Register both users
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&submitter, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
 
         // Submit and verify material
         let desc = String::from_str(&env, "Metal cans");
@@ -1512,6 +1732,10 @@ impl ScavengerContract {
 
         let user = Address::generate(&env);
         env.mock_all_auths();
+
+        // Register user first
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
 
         let desc = String::from_str(&env, "Test");
 
@@ -2987,5 +3211,357 @@ impl ScavengerContract {
 
         // Manufacturer 2 tries to deactivate - should panic
         client.deactivate_incentive(&1, &manufacturer2);
+    }
+}
+
+    // Participant-specific tests
+    #[test]
+    fn test_participant_persistence() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Alice");
+        let participant = client.register_participant(
+            &user,
+            &ParticipantRole::Recycler,
+            &name,
+            &40_748_817,
+            &-73_985_428,
+        );
+
+        // Retrieve and verify persistence
+        let retrieved = client.get_participant(&user).unwrap();
+        assert_eq!(retrieved.address, participant.address);
+        assert_eq!(retrieved.role, participant.role);
+        assert_eq!(retrieved.name, participant.name);
+        assert_eq!(retrieved.latitude, participant.latitude);
+        assert_eq!(retrieved.longitude, participant.longitude);
+        assert_eq!(retrieved.is_registered, participant.is_registered);
+        assert_eq!(retrieved.total_waste_processed, participant.total_waste_processed);
+        assert_eq!(retrieved.total_tokens_earned, participant.total_tokens_earned);
+        assert_eq!(retrieved.registered_at, participant.registered_at);
+    }
+
+    #[test]
+    fn test_participant_initialization() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Bob");
+        let participant = client.register_participant(
+            &user,
+            &ParticipantRole::Collector,
+            &name,
+            &51_507_351,
+            &-141_278,
+        );
+
+        // Verify correct initialization
+        assert!(participant.is_registered);
+        assert_eq!(participant.total_waste_processed, 0);
+        assert_eq!(participant.total_tokens_earned, 0);
+        assert!(participant.registered_at > 0);
+    }
+
+    #[test]
+    fn test_role_based_access_enforcement() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let collector = Address::generate(&env);
+        let manufacturer = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&collector, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer, &name, &0, &0);
+
+        // Collector can collect but not manufacture
+        assert!(client.can_collect(&collector));
+        assert!(!client.can_manufacture(&collector));
+
+        // Manufacturer can manufacture but not collect
+        assert!(!client.can_collect(&manufacturer));
+        assert!(client.can_manufacture(&manufacturer));
+    }
+
+    #[test]
+    fn test_participant_stats_update() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let submitter = Address::generate(&env);
+        let recycler = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&submitter, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
+
+        // Submit material
+        let desc = String::from_str(&env, "Test material");
+        client.submit_material(&WasteType::Metal, &5000, &submitter, &desc);
+
+        // Check waste processed updated
+        let participant = client.get_participant(&submitter).unwrap();
+        assert_eq!(participant.total_waste_processed, 5000);
+        assert_eq!(participant.total_tokens_earned, 0);
+
+        // Verify material
+        client.verify_material(&1, &recycler);
+
+        // Check tokens earned updated
+        let participant = client.get_participant(&submitter).unwrap();
+        assert_eq!(participant.total_waste_processed, 5000);
+        assert_eq!(participant.total_tokens_earned, 250); // 5kg * 5 * 10
+    }
+
+    #[test]
+    fn test_participant_stats_overflow_protection() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
+
+        // Submit multiple materials
+        let desc = String::from_str(&env, "Test");
+        for _ in 0..10 {
+            client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+        }
+
+        // Check stats accumulated correctly
+        let participant = client.get_participant(&user).unwrap();
+        assert_eq!(participant.total_waste_processed, 10000);
+    }
+
+    #[test]
+    fn test_deregister_participant() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
+
+        // Verify registered
+        assert!(client.can_collect(&user));
+
+        // Deregister
+        let deregistered = client.deregister_participant(&user);
+        assert!(!deregistered.is_registered);
+
+        // Verify can no longer perform actions
+        assert!(!client.can_collect(&user));
+    }
+
+    #[test]
+    fn test_update_location() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
+
+        // Update location
+        let updated = client.update_location(&user, &48_856_613, &2_352_222); // Paris
+        assert_eq!(updated.latitude, 48_856_613);
+        assert_eq!(updated.longitude, 2_352_222);
+
+        // Verify persistence
+        let retrieved = client.get_participant(&user).unwrap();
+        assert_eq!(retrieved.latitude, 48_856_613);
+        assert_eq!(retrieved.longitude, 2_352_222);
+    }
+
+    #[test]
+    #[should_panic(expected = "Participant not found")]
+    fn test_submit_material_unregistered_user() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let desc = String::from_str(&env, "Test");
+        client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+    }
+
+    #[test]
+    #[should_panic(expected = "Participant is not registered")]
+    fn test_update_role_deregistered_user() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user, &ParticipantRole::Collector, &name, &0, &0);
+        client.deregister_participant(&user);
+
+        // Should panic
+        client.update_role(&user, &ParticipantRole::Recycler);
+    }
+
+    #[test]
+    #[should_panic(expected = "Verifier is not registered")]
+    fn test_verify_material_deregistered_verifier() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let submitter = Address::generate(&env);
+        let recycler = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&submitter, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
+
+        // Submit material
+        let desc = String::from_str(&env, "Test");
+        client.submit_material(&WasteType::Paper, &1000, &submitter, &desc);
+
+        // Deregister recycler
+        client.deregister_participant(&recycler);
+
+        // Should panic
+        client.verify_material(&1, &recycler);
+    }
+
+    #[test]
+    fn test_batch_operations_update_participant_stats() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let submitter = Address::generate(&env);
+        let recycler = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&submitter, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
+
+        // Batch submit
+        let mut materials = soroban_sdk::Vec::new(&env);
+        materials.push_back((WasteType::Paper, 1000u64, String::from_str(&env, "Batch 1")));
+        materials.push_back((WasteType::Plastic, 2000u64, String::from_str(&env, "Batch 2")));
+        materials.push_back((WasteType::Metal, 3000u64, String::from_str(&env, "Batch 3")));
+
+        client.submit_materials_batch(&materials, &submitter);
+
+        // Check participant stats
+        let participant = client.get_participant(&submitter).unwrap();
+        assert_eq!(participant.total_waste_processed, 6000);
+
+        // Batch verify
+        let mut ids = soroban_sdk::Vec::new(&env);
+        ids.push_back(1);
+        ids.push_back(2);
+        ids.push_back(3);
+
+        client.verify_materials_batch(&ids, &recycler);
+
+        // Check tokens earned
+        let participant = client.get_participant(&submitter).unwrap();
+        assert_eq!(participant.total_waste_processed, 6000);
+        // 1kg*1*10 + 2kg*2*10 + 3kg*5*10 = 10 + 40 + 150 = 200
+        assert_eq!(participant.total_tokens_earned, 200);
+    }
+
+    #[test]
+    fn test_participant_storage_deterministic() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        
+        // Register twice with same data
+        let p1 = client.register_participant(
+            &user,
+            &ParticipantRole::Recycler,
+            &name,
+            &12345678,
+            &-87654321,
+        );
+
+        let p2 = client.register_participant(
+            &user,
+            &ParticipantRole::Recycler,
+            &name,
+            &12345678,
+            &-87654321,
+        );
+
+        // Should overwrite with same values
+        assert_eq!(p1.role, p2.role);
+        assert_eq!(p1.name, p2.name);
+        assert_eq!(p1.latitude, p2.latitude);
+        assert_eq!(p1.longitude, p2.longitude);
+    }
+
+    #[test]
+    fn test_multiple_participants_independent_stats() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user1 = Address::generate(&env);
+        let user2 = Address::generate(&env);
+        let recycler = Address::generate(&env);
+        env.mock_all_auths();
+
+        let name = soroban_sdk::Symbol::new(&env, "Test");
+        client.register_participant(&user1, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&user2, &ParticipantRole::Collector, &name, &0, &0);
+        client.register_participant(&recycler, &ParticipantRole::Recycler, &name, &0, &0);
+
+        // User1 submits
+        let desc = String::from_str(&env, "Test");
+        client.submit_material(&WasteType::Paper, &1000, &user1, &desc);
+        client.verify_material(&1, &recycler);
+
+        // User2 submits
+        client.submit_material(&WasteType::Metal, &5000, &user2, &desc);
+        client.verify_material(&2, &recycler);
+
+        // Check independent stats
+        let p1 = client.get_participant(&user1).unwrap();
+        let p2 = client.get_participant(&user2).unwrap();
+
+        assert_eq!(p1.total_waste_processed, 1000);
+        assert_eq!(p1.total_tokens_earned, 10); // 1kg * 1 * 10
+
+        assert_eq!(p2.total_waste_processed, 5000);
+        assert_eq!(p2.total_tokens_earned, 250); // 5kg * 5 * 10
     }
 }
