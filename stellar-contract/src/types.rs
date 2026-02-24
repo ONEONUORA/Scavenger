@@ -1,3 +1,198 @@
+
+use soroban_sdk::{contracttype, Address, String, Vec};
+
+/// Represents a transfer record in the recycling system
+/// This struct is fully compatible with Soroban storage and implements
+/// deterministic serialization for safe storage and retrieval
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferRecord {
+    /// Unique identifier for the transfer
+    pub id: u64,
+    /// Address of the sender
+    pub from: Address,
+    /// Address of the recipient
+    pub to: Address,
+    /// Type of item being transferred
+    pub item_type: TransferItemType,
+    /// Identifier of the item being transferred
+    pub item_id: u64,
+    /// Amount or quantity being transferred
+    pub amount: u64,
+    /// Timestamp when the transfer occurred
+    pub timestamp: u64,
+    /// Status of the transfer
+    pub status: TransferStatus,
+    /// Optional note or description
+    pub note: String,
+}
+
+/// Represents the type of item being transferred
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransferItemType {
+    /// Material/Waste transfer
+    Material = 0,
+    /// Token transfer
+    Token = 1,
+    /// Incentive transfer
+    Incentive = 2,
+    /// Ownership transfer
+    Ownership = 3,
+}
+
+/// Represents the status of a transfer
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransferStatus {
+    /// Transfer is pending
+    Pending = 0,
+    /// Transfer is in progress
+    InProgress = 1,
+    /// Transfer completed successfully
+    Completed = 2,
+    /// Transfer failed
+    Failed = 3,
+    /// Transfer was cancelled
+    Cancelled = 4,
+}
+
+impl TransferItemType {
+    /// Validates if the value is a valid TransferItemType variant
+    pub fn is_valid(value: u32) -> bool {
+        matches!(value, 0 | 1 | 2 | 3)
+    }
+
+    /// Converts a u32 to a TransferItemType
+    pub fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(TransferItemType::Material),
+            1 => Some(TransferItemType::Token),
+            2 => Some(TransferItemType::Incentive),
+            3 => Some(TransferItemType::Ownership),
+            _ => None,
+        }
+    }
+
+    /// Converts the TransferItemType to u32
+    pub fn to_u32(&self) -> u32 {
+        *self as u32
+    }
+
+    /// Returns the string representation
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TransferItemType::Material => "MATERIAL",
+            TransferItemType::Token => "TOKEN",
+            TransferItemType::Incentive => "INCENTIVE",
+            TransferItemType::Ownership => "OWNERSHIP",
+        }
+    }
+}
+
+impl TransferStatus {
+    /// Validates if the value is a valid TransferStatus variant
+    pub fn is_valid(value: u32) -> bool {
+        matches!(value, 0 | 1 | 2 | 3 | 4)
+    }
+
+    /// Converts a u32 to a TransferStatus
+    pub fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(TransferStatus::Pending),
+            1 => Some(TransferStatus::InProgress),
+            2 => Some(TransferStatus::Completed),
+            3 => Some(TransferStatus::Failed),
+            4 => Some(TransferStatus::Cancelled),
+            _ => None,
+        }
+    }
+
+    /// Converts the TransferStatus to u32
+    pub fn to_u32(&self) -> u32 {
+        *self as u32
+    }
+
+    /// Returns the string representation
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TransferStatus::Pending => "PENDING",
+            TransferStatus::InProgress => "IN_PROGRESS",
+            TransferStatus::Completed => "COMPLETED",
+            TransferStatus::Failed => "FAILED",
+            TransferStatus::Cancelled => "CANCELLED",
+        }
+    }
+
+    /// Checks if the status is final (cannot be changed)
+    pub fn is_final(&self) -> bool {
+        matches!(
+            self,
+            TransferStatus::Completed | TransferStatus::Failed | TransferStatus::Cancelled
+        )
+    }
+
+    /// Checks if the status is active (can still be modified)
+    pub fn is_active(&self) -> bool {
+        matches!(self, TransferStatus::Pending | TransferStatus::InProgress)
+    }
+}
+
+impl TransferRecord {
+    /// Creates a new TransferRecord with Pending status
+    pub fn new(
+        id: u64,
+        from: Address,
+        to: Address,
+        item_type: TransferItemType,
+        item_id: u64,
+        amount: u64,
+        timestamp: u64,
+        note: String,
+    ) -> Self {
+        Self {
+            id,
+            from,
+            to,
+            item_type,
+            item_id,
+            amount,
+            timestamp,
+            status: TransferStatus::Pending,
+            note,
+        }
+    }
+
+    /// Updates the status of the transfer
+    /// Returns true if updated, false if status is final
+    pub fn update_status(&mut self, new_status: TransferStatus) -> bool {
+        if self.status.is_final() {
+            return false;
+        }
+        self.status = new_status;
+        true
+    }
+
+    /// Validates the transfer record
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.amount == 0 {
+            return Err("Amount must be greater than zero");
+        }
+        if self.from == self.to {
+            return Err("Sender and recipient cannot be the same");
+        }
+        Ok(())
+    }
+
+    /// Checks if the transfer is complete
+    pub fn is_complete(&self) -> bool {
+        self.status == TransferStatus::Completed
+    }
+
+    /// Checks if the transfer can be modified
+    pub fn is_modifiable(&self) -> bool {
+        self.status.is_active()
+
 use soroban_sdk::{contracttype, Address, String, Symbol};
 
 /// Represents an incentive offered by a manufacturer to encourage recycling
@@ -84,6 +279,7 @@ impl Incentive {
         }
         let reward = self.calculate_reward(weight_grams);
         reward <= self.remaining_budget
+
     }
 }
 
@@ -1212,12 +1408,193 @@ mod tests {
 }
 
 
+
+
+#[cfg(test)]
+mod transfer_record_tests {
+
 #[cfg(test)]
 mod waste_tests {
+
     use super::*;
     use soroban_sdk::testutils::Address as _;
 
     #[test]
+
+    fn test_transfer_record_creation() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Material transfer");
+        
+        let record = TransferRecord::new(
+            1,
+            from.clone(),
+            to.clone(),
+            TransferItemType::Material,
+            42,
+            1000,
+            1234567890,
+            note.clone(),
+        );
+
+        assert_eq!(record.id, 1);
+        assert_eq!(record.from, from);
+        assert_eq!(record.to, to);
+        assert_eq!(record.item_type, TransferItemType::Material);
+        assert_eq!(record.item_id, 42);
+        assert_eq!(record.amount, 1000);
+        assert_eq!(record.timestamp, 1234567890);
+        assert_eq!(record.status, TransferStatus::Pending);
+        assert_eq!(record.note, note);
+    }
+
+    #[test]
+    fn test_transfer_record_storage_compatibility() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Test transfer");
+        
+        let record = TransferRecord::new(
+            1,
+            from,
+            to,
+            TransferItemType::Token,
+            100,
+            5000,
+            1234567890,
+            note,
+        );
+
+        // Test single record storage
+        env.storage().instance().set(&("transfer", 1u64), &record);
+        let retrieved: TransferRecord = env.storage().instance().get(&("transfer", 1u64)).unwrap();
+        
+        assert_eq!(retrieved, record);
+    }
+
+    #[test]
+    fn test_transfer_record_vector_storage() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Vector test");
+        
+        // Create vector of transfer records
+        let mut records = Vec::new(&env);
+        
+        for i in 1..=5 {
+            let record = TransferRecord::new(
+                i,
+                from.clone(),
+                to.clone(),
+                TransferItemType::Material,
+                i * 10,
+                i * 1000,
+                1234567890 + i,
+                note.clone(),
+            );
+            records.push_back(record);
+        }
+
+        // Store vector
+        env.storage().instance().set(&("transfer_history",), &records);
+        
+        // Retrieve vector
+        let retrieved: Vec<TransferRecord> = env.storage().instance().get(&("transfer_history",)).unwrap();
+        
+        assert_eq!(retrieved.len(), 5);
+        for i in 0..5 {
+            assert_eq!(retrieved.get(i).unwrap().id, (i + 1) as u64);
+        }
+    }
+
+    #[test]
+    fn test_transfer_record_vector_append() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Append test");
+        
+        // Create initial vector
+        let mut records = Vec::new(&env);
+        
+        let record1 = TransferRecord::new(
+            1,
+            from.clone(),
+            to.clone(),
+            TransferItemType::Material,
+            10,
+            1000,
+            1234567890,
+            note.clone(),
+        );
+        records.push_back(record1);
+        
+        // Store
+        env.storage().instance().set(&("history",), &records);
+        
+        // Retrieve and append
+        let mut retrieved: Vec<TransferRecord> = env.storage().instance().get(&("history",)).unwrap();
+        
+        let record2 = TransferRecord::new(
+            2,
+            from.clone(),
+            to.clone(),
+            TransferItemType::Token,
+            20,
+            2000,
+            1234567891,
+            note.clone(),
+        );
+        retrieved.push_back(record2);
+        
+        // Store updated vector
+        env.storage().instance().set(&("history",), &retrieved);
+        
+        // Verify
+        let final_records: Vec<TransferRecord> = env.storage().instance().get(&("history",)).unwrap();
+        assert_eq!(final_records.len(), 2);
+        assert_eq!(final_records.get(0).unwrap().id, 1);
+        assert_eq!(final_records.get(1).unwrap().id, 2);
+    }
+
+    #[test]
+    fn test_transfer_record_round_trip_serialization() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Round trip test");
+        
+        let original = TransferRecord::new(
+            42,
+            from,
+            to,
+            TransferItemType::Incentive,
+            999,
+            7500,
+            9876543210,
+            note,
+        );
+
+        // Store and retrieve
+        env.storage().instance().set(&("test_record",), &original);
+        let retrieved: TransferRecord = env.storage().instance().get(&("test_record",)).unwrap();
+        
+        // Verify all fields preserved
+        assert_eq!(retrieved.id, original.id);
+        assert_eq!(retrieved.from, original.from);
+        assert_eq!(retrieved.to, original.to);
+        assert_eq!(retrieved.item_type, original.item_type);
+        assert_eq!(retrieved.item_id, original.item_id);
+        assert_eq!(retrieved.amount, original.amount);
+        assert_eq!(retrieved.timestamp, original.timestamp);
+        assert_eq!(retrieved.status, original.status);
+        assert_eq!(retrieved.note, original.note);
+        
+        // Complete equality
+
     fn test_waste_creation() {
         let env = soroban_sdk::Env::default();
         let submitter = Address::generate(&env);
@@ -1295,10 +1672,175 @@ mod waste_tests {
         assert_eq!(retrieved.location, original.location);
         
         // Verify complete equality
+
         assert_eq!(retrieved, original);
     }
 
     #[test]
+
+    fn test_transfer_record_update_status() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Status test");
+        
+        let mut record = TransferRecord::new(
+            1,
+            from,
+            to,
+            TransferItemType::Material,
+            10,
+            1000,
+            1234567890,
+            note,
+        );
+
+        assert_eq!(record.status, TransferStatus::Pending);
+
+        // Update to InProgress
+        assert!(record.update_status(TransferStatus::InProgress));
+        assert_eq!(record.status, TransferStatus::InProgress);
+
+        // Update to Completed
+        assert!(record.update_status(TransferStatus::Completed));
+        assert_eq!(record.status, TransferStatus::Completed);
+
+        // Try to update final status (should fail)
+        assert!(!record.update_status(TransferStatus::Pending));
+        assert_eq!(record.status, TransferStatus::Completed);
+    }
+
+    #[test]
+    fn test_transfer_record_validate() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Validation test");
+        
+        // Valid record
+        let valid = TransferRecord::new(
+            1,
+            from.clone(),
+            to.clone(),
+            TransferItemType::Material,
+            10,
+            1000,
+            1234567890,
+            note.clone(),
+        );
+        assert!(valid.validate().is_ok());
+
+        // Zero amount
+        let zero_amount = TransferRecord::new(
+            2,
+            from.clone(),
+            to.clone(),
+            TransferItemType::Token,
+            20,
+            0,
+            1234567890,
+            note.clone(),
+        );
+        assert_eq!(zero_amount.validate(), Err("Amount must be greater than zero"));
+
+        // Same sender and recipient
+        let same_address = TransferRecord::new(
+            3,
+            from.clone(),
+            from.clone(),
+            TransferItemType::Material,
+            30,
+            1000,
+            1234567890,
+            note,
+        );
+        assert_eq!(same_address.validate(), Err("Sender and recipient cannot be the same"));
+    }
+
+    #[test]
+    fn test_transfer_record_is_complete() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Complete test");
+        
+        let mut record = TransferRecord::new(
+            1,
+            from,
+            to,
+            TransferItemType::Material,
+            10,
+            1000,
+            1234567890,
+            note,
+        );
+
+        assert!(!record.is_complete());
+        
+        record.update_status(TransferStatus::InProgress);
+        assert!(!record.is_complete());
+        
+        record.update_status(TransferStatus::Completed);
+        assert!(record.is_complete());
+    }
+
+    #[test]
+    fn test_transfer_record_is_modifiable() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Modifiable test");
+        
+        let mut record = TransferRecord::new(
+            1,
+            from,
+            to,
+            TransferItemType::Token,
+            10,
+            1000,
+            1234567890,
+            note,
+        );
+
+        // Pending is modifiable
+        assert!(record.is_modifiable());
+
+        // InProgress is modifiable
+        record.update_status(TransferStatus::InProgress);
+        assert!(record.is_modifiable());
+
+        // Completed is not modifiable
+        record.update_status(TransferStatus::Completed);
+        assert!(!record.is_modifiable());
+    }
+
+    #[test]
+    fn test_transfer_record_all_item_types() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Type test");
+        
+        let types = [
+            TransferItemType::Material,
+            TransferItemType::Token,
+            TransferItemType::Incentive,
+            TransferItemType::Ownership,
+        ];
+
+        for (i, item_type) in types.iter().enumerate() {
+            let record = TransferRecord::new(
+                i as u64 + 1,
+                from.clone(),
+                to.clone(),
+                *item_type,
+                i as u64 * 10,
+                1000,
+                1234567890,
+                note.clone(),
+            );
+            assert_eq!(record.item_type, *item_type);
+
     fn test_waste_update_status() {
         let env = soroban_sdk::Env::default();
         let submitter = Address::generate(&env);
@@ -1461,10 +2003,40 @@ mod waste_tests {
                 location.clone(),
             );
             assert_eq!(waste.waste_type, *waste_type);
+
         }
     }
 
     #[test]
+
+    fn test_transfer_record_all_statuses() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Status test");
+        
+        let statuses = [
+            TransferStatus::Pending,
+            TransferStatus::InProgress,
+            TransferStatus::Completed,
+            TransferStatus::Failed,
+            TransferStatus::Cancelled,
+        ];
+
+        for (i, status) in statuses.iter().enumerate() {
+            let mut record = TransferRecord::new(
+                i as u64 + 1,
+                from.clone(),
+                to.clone(),
+                TransferItemType::Material,
+                i as u64 * 10,
+                1000,
+                1234567890,
+                note.clone(),
+            );
+            record.status = *status;
+            assert_eq!(record.status, *status);
+
     fn test_waste_all_statuses() {
         let env = soroban_sdk::Env::default();
         let submitter = Address::generate(&env);
@@ -1488,10 +2060,62 @@ mod waste_tests {
             );
             waste.status = *status;
             assert_eq!(waste.status, *status);
+
         }
     }
 
     #[test]
+
+    fn test_transfer_record_boundary_values() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Boundary test");
+        
+        // Maximum values
+        let max_record = TransferRecord::new(
+            u64::MAX,
+            from.clone(),
+            to.clone(),
+            TransferItemType::Material,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            note.clone(),
+        );
+        assert!(max_record.validate().is_ok());
+
+        // Minimum valid amount
+        let min_record = TransferRecord::new(
+            1,
+            from,
+            to,
+            TransferItemType::Token,
+            1,
+            1,
+            0,
+            note,
+        );
+        assert!(min_record.validate().is_ok());
+    }
+
+    #[test]
+    fn test_transfer_record_clone() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Clone test");
+        
+        let original = TransferRecord::new(
+            1,
+            from,
+            to,
+            TransferItemType::Material,
+            10,
+            1000,
+            1234567890,
+            note,
+
     fn test_waste_boundary_values() {
         let env = soroban_sdk::Env::default();
         let submitter = Address::generate(&env);
@@ -1544,10 +2168,12 @@ mod waste_tests {
             submitter,
             1234567890,
             location,
+
         );
 
         let cloned = original.clone();
         
+
         assert_eq!(cloned.id, original.id);
         assert_eq!(cloned.waste_type, original.waste_type);
         assert_eq!(cloned.weight, original.weight);
@@ -1555,10 +2181,75 @@ mod waste_tests {
         assert_eq!(cloned.submitted_at, original.submitted_at);
         assert_eq!(cloned.status, original.status);
         assert_eq!(cloned.location, original.location);
+
         assert_eq!(cloned, original);
     }
 
     #[test]
+
+    fn test_transfer_record_vector_iteration() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Iteration test");
+        
+        let mut records = Vec::new(&env);
+        
+        for i in 1..=10 {
+            let record = TransferRecord::new(
+                i,
+                from.clone(),
+                to.clone(),
+                TransferItemType::Material,
+                i * 10,
+                i * 1000,
+                1234567890 + i,
+                note.clone(),
+            );
+            records.push_back(record);
+        }
+
+        // Iterate and verify order
+        for i in 0..10 {
+            let record = records.get(i).unwrap();
+            assert_eq!(record.id, (i + 1) as u64);
+            assert_eq!(record.amount, ((i + 1) * 1000) as u64);
+        }
+    }
+
+    #[test]
+    fn test_transfer_record_vector_deterministic() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Deterministic test");
+        
+        let mut records = Vec::new(&env);
+        
+        for i in 1..=5 {
+            let record = TransferRecord::new(
+                i,
+                from.clone(),
+                to.clone(),
+                TransferItemType::Token,
+                i * 10,
+                i * 1000,
+                1234567890 + i,
+                note.clone(),
+            );
+            records.push_back(record);
+        }
+
+        // Store and retrieve multiple times
+        for _ in 0..10 {
+            env.storage().instance().set(&("deterministic",), &records);
+            let retrieved: Vec<TransferRecord> = env.storage().instance().get(&("deterministic",)).unwrap();
+            
+            assert_eq!(retrieved.len(), records.len());
+            for i in 0..5 {
+                assert_eq!(retrieved.get(i).unwrap(), records.get(i).unwrap());
+            }
+
     fn test_waste_equality() {
         let env = soroban_sdk::Env::default();
         let submitter1 = Address::generate(&env);
@@ -1631,10 +2322,113 @@ mod waste_tests {
             assert_eq!(retrieved.id, i);
             assert_eq!(retrieved.weight, 1000 * i);
             assert_eq!(retrieved.submitted_at, 1234567890 + i);
+
         }
     }
 
     #[test]
+
+    fn test_transfer_record_empty_vector() {
+        let env = soroban_sdk::Env::default();
+        
+        let empty_records: Vec<TransferRecord> = Vec::new(&env);
+        
+        // Store empty vector
+        env.storage().instance().set(&("empty",), &empty_records);
+        
+        // Retrieve
+        let retrieved: Vec<TransferRecord> = env.storage().instance().get(&("empty",)).unwrap();
+        assert_eq!(retrieved.len(), 0);
+    }
+
+    #[test]
+    fn test_transfer_record_large_vector() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let note = String::from_str(&env, "Large vector test");
+        
+        let mut records = Vec::new(&env);
+        
+        // Create 100 records
+        for i in 1..=100 {
+            let record = TransferRecord::new(
+                i,
+                from.clone(),
+                to.clone(),
+                TransferItemType::Material,
+                i * 10,
+                i * 1000,
+                1234567890 + i,
+                note.clone(),
+            );
+            records.push_back(record);
+        }
+
+        // Store
+        env.storage().instance().set(&("large",), &records);
+        
+        // Retrieve and verify
+        let retrieved: Vec<TransferRecord> = env.storage().instance().get(&("large",)).unwrap();
+        assert_eq!(retrieved.len(), 100);
+        
+        // Spot check
+        assert_eq!(retrieved.get(0).unwrap().id, 1);
+        assert_eq!(retrieved.get(49).unwrap().id, 50);
+        assert_eq!(retrieved.get(99).unwrap().id, 100);
+    }
+
+    #[test]
+    fn test_transfer_record_empty_note() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let empty_note = String::from_str(&env, "");
+        
+        let record = TransferRecord::new(
+            1,
+            from,
+            to,
+            TransferItemType::Material,
+            10,
+            1000,
+            1234567890,
+            empty_note.clone(),
+        );
+
+        assert_eq!(record.note, empty_note);
+        
+        // Test storage
+        env.storage().instance().set(&("empty_note",), &record);
+        let retrieved: TransferRecord = env.storage().instance().get(&("empty_note",)).unwrap();
+        assert_eq!(retrieved.note, empty_note);
+    }
+
+    #[test]
+    fn test_transfer_record_long_note() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let long_note = String::from_str(
+            &env,
+            "This is a very long note with many characters to test storage limits and serialization"
+        );
+        
+        let record = TransferRecord::new(
+            1,
+            from,
+            to,
+            TransferItemType::Token,
+            10,
+            1000,
+            1234567890,
+            long_note.clone(),
+        );
+
+        env.storage().instance().set(&("long_note",), &record);
+        let retrieved: TransferRecord = env.storage().instance().get(&("long_note",)).unwrap();
+        assert_eq!(retrieved.note, long_note);
+
     fn test_waste_storage_with_different_keys() {
         let env = soroban_sdk::Env::default();
         let submitter = Address::generate(&env);
@@ -1731,10 +2525,127 @@ mod waste_tests {
         env.storage().instance().set(&("long_loc",), &waste);
         let retrieved: Waste = env.storage().instance().get(&("long_loc",)).unwrap();
         assert_eq!(retrieved.location, long_location);
+
     }
 }
 
 #[cfg(test)]
+
+mod transfer_item_type_tests {
+    use super::*;
+
+    #[test]
+    fn test_transfer_item_type_values() {
+        assert_eq!(TransferItemType::Material as u32, 0);
+        assert_eq!(TransferItemType::Token as u32, 1);
+        assert_eq!(TransferItemType::Incentive as u32, 2);
+        assert_eq!(TransferItemType::Ownership as u32, 3);
+    }
+
+    #[test]
+    fn test_transfer_item_type_is_valid() {
+        assert!(TransferItemType::is_valid(0));
+        assert!(TransferItemType::is_valid(1));
+        assert!(TransferItemType::is_valid(2));
+        assert!(TransferItemType::is_valid(3));
+        assert!(!TransferItemType::is_valid(4));
+        assert!(!TransferItemType::is_valid(999));
+    }
+
+    #[test]
+    fn test_transfer_item_type_from_u32() {
+        assert_eq!(TransferItemType::from_u32(0), Some(TransferItemType::Material));
+        assert_eq!(TransferItemType::from_u32(1), Some(TransferItemType::Token));
+        assert_eq!(TransferItemType::from_u32(2), Some(TransferItemType::Incentive));
+        assert_eq!(TransferItemType::from_u32(3), Some(TransferItemType::Ownership));
+        assert_eq!(TransferItemType::from_u32(4), None);
+    }
+
+    #[test]
+    fn test_transfer_item_type_to_u32() {
+        assert_eq!(TransferItemType::Material.to_u32(), 0);
+        assert_eq!(TransferItemType::Token.to_u32(), 1);
+        assert_eq!(TransferItemType::Incentive.to_u32(), 2);
+        assert_eq!(TransferItemType::Ownership.to_u32(), 3);
+    }
+
+    #[test]
+    fn test_transfer_item_type_as_str() {
+        assert_eq!(TransferItemType::Material.as_str(), "MATERIAL");
+        assert_eq!(TransferItemType::Token.as_str(), "TOKEN");
+        assert_eq!(TransferItemType::Incentive.as_str(), "INCENTIVE");
+        assert_eq!(TransferItemType::Ownership.as_str(), "OWNERSHIP");
+    }
+}
+
+#[cfg(test)]
+mod transfer_status_tests {
+    use super::*;
+
+    #[test]
+    fn test_transfer_status_values() {
+        assert_eq!(TransferStatus::Pending as u32, 0);
+        assert_eq!(TransferStatus::InProgress as u32, 1);
+        assert_eq!(TransferStatus::Completed as u32, 2);
+        assert_eq!(TransferStatus::Failed as u32, 3);
+        assert_eq!(TransferStatus::Cancelled as u32, 4);
+    }
+
+    #[test]
+    fn test_transfer_status_is_valid() {
+        assert!(TransferStatus::is_valid(0));
+        assert!(TransferStatus::is_valid(1));
+        assert!(TransferStatus::is_valid(2));
+        assert!(TransferStatus::is_valid(3));
+        assert!(TransferStatus::is_valid(4));
+        assert!(!TransferStatus::is_valid(5));
+    }
+
+    #[test]
+    fn test_transfer_status_from_u32() {
+        assert_eq!(TransferStatus::from_u32(0), Some(TransferStatus::Pending));
+        assert_eq!(TransferStatus::from_u32(1), Some(TransferStatus::InProgress));
+        assert_eq!(TransferStatus::from_u32(2), Some(TransferStatus::Completed));
+        assert_eq!(TransferStatus::from_u32(3), Some(TransferStatus::Failed));
+        assert_eq!(TransferStatus::from_u32(4), Some(TransferStatus::Cancelled));
+        assert_eq!(TransferStatus::from_u32(5), None);
+    }
+
+    #[test]
+    fn test_transfer_status_to_u32() {
+        assert_eq!(TransferStatus::Pending.to_u32(), 0);
+        assert_eq!(TransferStatus::InProgress.to_u32(), 1);
+        assert_eq!(TransferStatus::Completed.to_u32(), 2);
+        assert_eq!(TransferStatus::Failed.to_u32(), 3);
+        assert_eq!(TransferStatus::Cancelled.to_u32(), 4);
+    }
+
+    #[test]
+    fn test_transfer_status_as_str() {
+        assert_eq!(TransferStatus::Pending.as_str(), "PENDING");
+        assert_eq!(TransferStatus::InProgress.as_str(), "IN_PROGRESS");
+        assert_eq!(TransferStatus::Completed.as_str(), "COMPLETED");
+        assert_eq!(TransferStatus::Failed.as_str(), "FAILED");
+        assert_eq!(TransferStatus::Cancelled.as_str(), "CANCELLED");
+    }
+
+    #[test]
+    fn test_transfer_status_is_final() {
+        assert!(!TransferStatus::Pending.is_final());
+        assert!(!TransferStatus::InProgress.is_final());
+        assert!(TransferStatus::Completed.is_final());
+        assert!(TransferStatus::Failed.is_final());
+        assert!(TransferStatus::Cancelled.is_final());
+    }
+
+    #[test]
+    fn test_transfer_status_is_active() {
+        assert!(TransferStatus::Pending.is_active());
+        assert!(TransferStatus::InProgress.is_active());
+        assert!(!TransferStatus::Completed.is_active());
+        assert!(!TransferStatus::Failed.is_active());
+        assert!(!TransferStatus::Cancelled.is_active());
+
 mod waste_status_tests {
     use super::*;
 
@@ -1825,6 +2736,7 @@ mod waste_status_tests {
             assert_eq!(status.to_u32(), i as u32);
             assert_eq!(WasteStatus::from_u32(i as u32), Some(*status));
         }
+
 
 #[cfg(test)]
 mod waste_transfer_tests {
@@ -2091,5 +3003,6 @@ mod incentive_tests {
         assert_eq!(incentive1, incentive2);
         assert_eq!(incentive1.id, incentive2.id);
         assert_eq!(incentive1.remaining_budget, incentive2.remaining_budget);
+
     }
 }

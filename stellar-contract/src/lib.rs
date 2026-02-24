@@ -3,7 +3,14 @@
 mod types;
 
 
+
+pub use types::{
+    Material, ParticipantRole, RecyclingStats, TransferItemType, TransferRecord, TransferStatus,
+    WasteType,
+};
+
 pub use types::{Material, ParticipantRole, RecyclingStats, Waste, WasteStatus, WasteType};
+
 
 pub use types::{Incentive, Material, ParticipantRole, RecyclingStats, Waste, WasteTransfer, WasteType};
 
