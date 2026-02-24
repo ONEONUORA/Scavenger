@@ -199,6 +199,197 @@ impl Material {
     }
 }
 
+/// Represents a waste item in the recycling system
+/// This is the main struct that tracks waste throughout its lifecycle
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Waste {
+    /// Unique identifier for the waste item
+    pub waste_id: u128,
+    /// Type of waste material
+    pub waste_type: WasteType,
+    /// Weight of the waste in grams
+    pub weight: u128,
+    /// Current owner of the waste
+    pub current_owner: Address,
+    /// Latitude coordinate (scaled by 1e6 for precision)
+    pub latitude: i128,
+    /// Longitude coordinate (scaled by 1e6 for precision)
+    pub longitude: i128,
+    /// Timestamp when the waste was recycled (0 if not yet recycled)
+    pub recycled_timestamp: u64,
+    /// Whether the waste is currently active in the system
+    pub is_active: bool,
+    /// Whether the waste has been confirmed/verified
+    pub is_confirmed: bool,
+    /// Address of the confirmer/verifier
+    pub confirmer: Address,
+}
+
+impl Waste {
+    /// Creates a new Waste instance with all fields
+    pub fn new(
+        waste_id: u128,
+        waste_type: WasteType,
+        weight: u128,
+        current_owner: Address,
+        latitude: i128,
+        longitude: i128,
+        recycled_timestamp: u64,
+        is_active: bool,
+        is_confirmed: bool,
+        confirmer: Address,
+    ) -> Self {
+        Self {
+            waste_id,
+            waste_type,
+            weight,
+            current_owner,
+            latitude,
+            longitude,
+            recycled_timestamp,
+            is_active,
+            is_confirmed,
+            confirmer,
+        }
+    }
+
+    /// Validates that the waste has valid coordinates
+    pub fn has_valid_coordinates(&self) -> bool {
+        let max_lat = 90_000_000i128;
+        let max_lon = 180_000_000i128;
+        
+        self.latitude >= -max_lat 
+            && self.latitude <= max_lat
+            && self.longitude >= -max_lon
+            && self.longitude <= max_lon
+    }
+
+    /// Checks if the waste has been recycled
+    pub fn is_recycled(&self) -> bool {
+        self.recycled_timestamp > 0
+    }
+
+    /// Checks if the waste meets minimum weight requirement (100g)
+    pub fn meets_minimum_weight(&self) -> bool {
+        self.weight >= 100
+    }
+
+    /// Marks the waste as recycled with the given timestamp
+    pub fn mark_recycled(&mut self, timestamp: u64) {
+        self.recycled_timestamp = timestamp;
+    }
+
+    /// Confirms the waste with the given confirmer
+    pub fn confirm(&mut self, confirmer: Address) {
+        self.is_confirmed = true;
+        self.confirmer = confirmer;
+    }
+
+    /// Deactivates the waste
+    pub fn deactivate(&mut self) {
+        self.is_active = false;
+    }
+
+    /// Transfers ownership to a new owner
+    pub fn transfer_to(&mut self, new_owner: Address) {
+        self.current_owner = new_owner;
+    }
+
+    /// Updates the location of the waste
+    pub fn update_location(&mut self, latitude: i128, longitude: i128) {
+        self.latitude = latitude;
+        self.longitude = longitude;
+    }
+}
+
+/// Builder pattern for constructing Waste instances
+/// Provides a fluent API for creating waste with optional fields
+pub struct WasteBuilder {
+    waste_id: u128,
+    waste_type: WasteType,
+    weight: u128,
+    current_owner: Address,
+    latitude: i128,
+    longitude: i128,
+    recycled_timestamp: u64,
+    is_active: bool,
+    is_confirmed: bool,
+    confirmer: Option<Address>,
+}
+
+impl WasteBuilder {
+    /// Creates a new WasteBuilder with required fields
+    pub fn new(
+        waste_id: u128,
+        waste_type: WasteType,
+        weight: u128,
+        current_owner: Address,
+    ) -> Self {
+        Self {
+            waste_id,
+            waste_type,
+            weight,
+            current_owner: current_owner.clone(),
+            latitude: 0,
+            longitude: 0,
+            recycled_timestamp: 0,
+            is_active: true,
+            is_confirmed: false,
+            confirmer: Some(current_owner),
+        }
+    }
+
+    /// Sets the location coordinates
+    pub fn location(mut self, latitude: i128, longitude: i128) -> Self {
+        self.latitude = latitude;
+        self.longitude = longitude;
+        self
+    }
+
+    /// Sets the recycled timestamp
+    pub fn recycled_at(mut self, timestamp: u64) -> Self {
+        self.recycled_timestamp = timestamp;
+        self
+    }
+
+    /// Sets the active status
+    pub fn active(mut self, is_active: bool) -> Self {
+        self.is_active = is_active;
+        self
+    }
+
+    /// Sets the confirmed status and confirmer
+    pub fn confirmed(mut self, confirmer: Address) -> Self {
+        self.is_confirmed = true;
+        self.confirmer = Some(confirmer);
+        self
+    }
+
+    /// Sets the confirmer address
+    pub fn confirmer(mut self, confirmer: Address) -> Self {
+        self.confirmer = Some(confirmer);
+        self
+    }
+
+    /// Builds the Waste instance
+    pub fn build(self) -> Waste {
+        let confirmer = self.confirmer.unwrap_or_else(|| self.current_owner.clone());
+        Waste {
+            waste_id: self.waste_id,
+            waste_type: self.waste_type,
+            weight: self.weight,
+            current_owner: self.current_owner,
+            latitude: self.latitude,
+            longitude: self.longitude,
+            recycled_timestamp: self.recycled_timestamp,
+            is_active: self.is_active,
+            is_confirmed: self.is_confirmed,
+            confirmer,
+        }
+    }
+}
+
 /// Represents a waste transfer in the supply chain
 /// Tracks the movement of waste materials between participants
 #[contracttype]
@@ -1310,5 +1501,634 @@ mod waste_transfer_tests {
         assert!(transfer.has_valid_coordinates());
         assert_eq!(transfer.latitude, 0);
         assert_eq!(transfer.longitude, 0);
+    }
+}
+
+#[cfg(test)]
+mod waste_tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+
+    #[test]
+    fn test_waste_creation() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        let waste = Waste::new(
+            1u128,
+            WasteType::Plastic,
+            5000u128,
+            owner.clone(),
+            40_748_817,
+            -73_985_428,
+            0,
+            true,
+            false,
+            confirmer.clone(),
+        );
+
+        assert_eq!(waste.waste_id, 1);
+        assert_eq!(waste.waste_type, WasteType::Plastic);
+        assert_eq!(waste.weight, 5000);
+        assert_eq!(waste.current_owner, owner);
+        assert_eq!(waste.latitude, 40_748_817);
+        assert_eq!(waste.longitude, -73_985_428);
+        assert_eq!(waste.recycled_timestamp, 0);
+        assert!(waste.is_active);
+        assert!(!waste.is_confirmed);
+        assert_eq!(waste.confirmer, confirmer);
+    }
+
+    #[test]
+    fn test_waste_valid_coordinates() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        // Valid coordinates
+        let valid_waste = Waste::new(
+            1u128,
+            WasteType::Paper,
+            1000u128,
+            owner.clone(),
+            45_000_000,
+            90_000_000,
+            0,
+            true,
+            false,
+            confirmer.clone(),
+        );
+        assert!(valid_waste.has_valid_coordinates());
+
+        // Invalid latitude
+        let invalid_waste = Waste::new(
+            2u128,
+            WasteType::Metal,
+            2000u128,
+            owner.clone(),
+            91_000_000,
+            0,
+            0,
+            true,
+            false,
+            confirmer.clone(),
+        );
+        assert!(!invalid_waste.has_valid_coordinates());
+
+        // Invalid longitude
+        let invalid_waste2 = Waste::new(
+            3u128,
+            WasteType::Glass,
+            3000u128,
+            owner,
+            0,
+            181_000_000,
+            0,
+            true,
+            false,
+            confirmer,
+        );
+        assert!(!invalid_waste2.has_valid_coordinates());
+    }
+
+    #[test]
+    fn test_waste_is_recycled() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        // Not recycled
+        let waste1 = Waste::new(
+            1u128,
+            WasteType::Plastic,
+            1000u128,
+            owner.clone(),
+            0,
+            0,
+            0,
+            true,
+            false,
+            confirmer.clone(),
+        );
+        assert!(!waste1.is_recycled());
+
+        // Recycled
+        let waste2 = Waste::new(
+            2u128,
+            WasteType::Paper,
+            2000u128,
+            owner,
+            0,
+            0,
+            1234567890,
+            true,
+            false,
+            confirmer,
+        );
+        assert!(waste2.is_recycled());
+    }
+
+    #[test]
+    fn test_waste_meets_minimum_weight() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        // Below minimum
+        let waste1 = Waste::new(
+            1u128,
+            WasteType::Plastic,
+            50u128,
+            owner.clone(),
+            0,
+            0,
+            0,
+            true,
+            false,
+            confirmer.clone(),
+        );
+        assert!(!waste1.meets_minimum_weight());
+
+        // At minimum
+        let waste2 = Waste::new(
+            2u128,
+            WasteType::Paper,
+            100u128,
+            owner.clone(),
+            0,
+            0,
+            0,
+            true,
+            false,
+            confirmer.clone(),
+        );
+        assert!(waste2.meets_minimum_weight());
+
+        // Above minimum
+        let waste3 = Waste::new(
+            3u128,
+            WasteType::Metal,
+            5000u128,
+            owner,
+            0,
+            0,
+            0,
+            true,
+            false,
+            confirmer,
+        );
+        assert!(waste3.meets_minimum_weight());
+    }
+
+    #[test]
+    fn test_waste_mark_recycled() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        let mut waste = Waste::new(
+            1u128,
+            WasteType::Plastic,
+            1000u128,
+            owner,
+            0,
+            0,
+            0,
+            true,
+            false,
+            confirmer,
+        );
+
+        assert!(!waste.is_recycled());
+        
+        waste.mark_recycled(1234567890);
+        
+        assert!(waste.is_recycled());
+        assert_eq!(waste.recycled_timestamp, 1234567890);
+    }
+
+    #[test]
+    fn test_waste_confirm() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer1 = Address::generate(&env);
+        let confirmer2 = Address::generate(&env);
+        
+        let mut waste = Waste::new(
+            1u128,
+            WasteType::Paper,
+            1000u128,
+            owner,
+            0,
+            0,
+            0,
+            true,
+            false,
+            confirmer1,
+        );
+
+        assert!(!waste.is_confirmed);
+        
+        waste.confirm(confirmer2.clone());
+        
+        assert!(waste.is_confirmed);
+        assert_eq!(waste.confirmer, confirmer2);
+    }
+
+    #[test]
+    fn test_waste_deactivate() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        let mut waste = Waste::new(
+            1u128,
+            WasteType::Metal,
+            1000u128,
+            owner,
+            0,
+            0,
+            0,
+            true,
+            false,
+            confirmer,
+        );
+
+        assert!(waste.is_active);
+        
+        waste.deactivate();
+        
+        assert!(!waste.is_active);
+    }
+
+    #[test]
+    fn test_waste_transfer_to() {
+        let env = soroban_sdk::Env::default();
+        let owner1 = Address::generate(&env);
+        let owner2 = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        let mut waste = Waste::new(
+            1u128,
+            WasteType::Glass,
+            1000u128,
+            owner1.clone(),
+            0,
+            0,
+            0,
+            true,
+            false,
+            confirmer,
+        );
+
+        assert_eq!(waste.current_owner, owner1);
+        
+        waste.transfer_to(owner2.clone());
+        
+        assert_eq!(waste.current_owner, owner2);
+    }
+
+    #[test]
+    fn test_waste_update_location() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        let mut waste = Waste::new(
+            1u128,
+            WasteType::PetPlastic,
+            1000u128,
+            owner,
+            0,
+            0,
+            0,
+            true,
+            false,
+            confirmer,
+        );
+
+        assert_eq!(waste.latitude, 0);
+        assert_eq!(waste.longitude, 0);
+        
+        waste.update_location(40_748_817, -73_985_428);
+        
+        assert_eq!(waste.latitude, 40_748_817);
+        assert_eq!(waste.longitude, -73_985_428);
+    }
+
+    #[test]
+    fn test_waste_storage_compatibility() {
+        let env = soroban_sdk::Env::default();
+        let contract_id = env.register_contract(None, crate::ScavengerContract);
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        let waste = Waste::new(
+            12345u128,
+            WasteType::Metal,
+            5000u128,
+            owner.clone(),
+            40_748_817,
+            -73_985_428,
+            1234567890,
+            true,
+            true,
+            confirmer.clone(),
+        );
+
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&("waste", 1u64), &waste);
+            let retrieved: Waste = env.storage().instance().get(&("waste", 1u64)).unwrap();
+            
+            assert_eq!(retrieved.waste_id, waste.waste_id);
+            assert_eq!(retrieved.waste_type, waste.waste_type);
+            assert_eq!(retrieved.weight, waste.weight);
+            assert_eq!(retrieved.current_owner, waste.current_owner);
+            assert_eq!(retrieved.latitude, waste.latitude);
+            assert_eq!(retrieved.longitude, waste.longitude);
+            assert_eq!(retrieved.recycled_timestamp, waste.recycled_timestamp);
+            assert_eq!(retrieved.is_active, waste.is_active);
+            assert_eq!(retrieved.is_confirmed, waste.is_confirmed);
+            assert_eq!(retrieved.confirmer, waste.confirmer);
+        });
+    }
+
+    #[test]
+    fn test_waste_clone_and_equality() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        let waste1 = Waste::new(
+            1u128,
+            WasteType::Plastic,
+            1000u128,
+            owner.clone(),
+            0,
+            0,
+            0,
+            true,
+            false,
+            confirmer.clone(),
+        );
+
+        let waste2 = waste1.clone();
+        assert_eq!(waste1, waste2);
+
+        let waste3 = Waste::new(
+            2u128,
+            WasteType::Paper,
+            2000u128,
+            owner,
+            0,
+            0,
+            0,
+            true,
+            false,
+            confirmer,
+        );
+        assert_ne!(waste1, waste3);
+    }
+
+    #[test]
+    fn test_waste_builder_basic() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        
+        let waste = WasteBuilder::new(
+            1u128,
+            WasteType::Plastic,
+            5000u128,
+            owner.clone(),
+        ).build();
+
+        assert_eq!(waste.waste_id, 1);
+        assert_eq!(waste.waste_type, WasteType::Plastic);
+        assert_eq!(waste.weight, 5000);
+        assert_eq!(waste.current_owner, owner);
+        assert_eq!(waste.latitude, 0);
+        assert_eq!(waste.longitude, 0);
+        assert_eq!(waste.recycled_timestamp, 0);
+        assert!(waste.is_active);
+        assert!(!waste.is_confirmed);
+    }
+
+    #[test]
+    fn test_waste_builder_with_location() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        
+        let waste = WasteBuilder::new(
+            1u128,
+            WasteType::Paper,
+            3000u128,
+            owner,
+        )
+        .location(40_748_817, -73_985_428)
+        .build();
+
+        assert_eq!(waste.latitude, 40_748_817);
+        assert_eq!(waste.longitude, -73_985_428);
+    }
+
+    #[test]
+    fn test_waste_builder_with_recycled_timestamp() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        
+        let waste = WasteBuilder::new(
+            1u128,
+            WasteType::Metal,
+            2000u128,
+            owner,
+        )
+        .recycled_at(1234567890)
+        .build();
+
+        assert_eq!(waste.recycled_timestamp, 1234567890);
+        assert!(waste.is_recycled());
+    }
+
+    #[test]
+    fn test_waste_builder_with_active_status() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        
+        let waste = WasteBuilder::new(
+            1u128,
+            WasteType::Glass,
+            1500u128,
+            owner,
+        )
+        .active(false)
+        .build();
+
+        assert!(!waste.is_active);
+    }
+
+    #[test]
+    fn test_waste_builder_with_confirmed() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        let waste = WasteBuilder::new(
+            1u128,
+            WasteType::PetPlastic,
+            4000u128,
+            owner,
+        )
+        .confirmed(confirmer.clone())
+        .build();
+
+        assert!(waste.is_confirmed);
+        assert_eq!(waste.confirmer, confirmer);
+    }
+
+    #[test]
+    fn test_waste_builder_fluent_api() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        let waste = WasteBuilder::new(
+            1u128,
+            WasteType::Metal,
+            5000u128,
+            owner,
+        )
+        .location(51_507_351, -141_278)
+        .recycled_at(1234567890)
+        .active(true)
+        .confirmed(confirmer.clone())
+        .build();
+
+        assert_eq!(waste.waste_id, 1);
+        assert_eq!(waste.waste_type, WasteType::Metal);
+        assert_eq!(waste.weight, 5000);
+        assert_eq!(waste.latitude, 51_507_351);
+        assert_eq!(waste.longitude, -141_278);
+        assert_eq!(waste.recycled_timestamp, 1234567890);
+        assert!(waste.is_active);
+        assert!(waste.is_confirmed);
+        assert_eq!(waste.confirmer, confirmer);
+    }
+
+    #[test]
+    fn test_waste_builder_with_custom_confirmer() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        let waste = WasteBuilder::new(
+            1u128,
+            WasteType::Plastic,
+            3000u128,
+            owner,
+        )
+        .confirmer(confirmer.clone())
+        .build();
+
+        assert_eq!(waste.confirmer, confirmer);
+    }
+
+    #[test]
+    fn test_waste_large_weight() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        let large_weight = u128::MAX;
+        let waste = Waste::new(
+            1u128,
+            WasteType::Metal,
+            large_weight,
+            owner,
+            0,
+            0,
+            0,
+            true,
+            false,
+            confirmer,
+        );
+
+        assert_eq!(waste.weight, large_weight);
+        assert!(waste.meets_minimum_weight());
+    }
+
+    #[test]
+    fn test_waste_all_waste_types() {
+        let env = soroban_sdk::Env::default();
+        let owner = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        let waste_types = [
+            WasteType::Paper,
+            WasteType::PetPlastic,
+            WasteType::Plastic,
+            WasteType::Metal,
+            WasteType::Glass,
+        ];
+
+        for (i, waste_type) in waste_types.iter().enumerate() {
+            let waste = Waste::new(
+                i as u128,
+                *waste_type,
+                1000u128,
+                owner.clone(),
+                0,
+                0,
+                0,
+                true,
+                false,
+                confirmer.clone(),
+            );
+            assert_eq!(waste.waste_type, *waste_type);
+        }
+    }
+
+    #[test]
+    fn test_waste_lifecycle() {
+        let env = soroban_sdk::Env::default();
+        let owner1 = Address::generate(&env);
+        let owner2 = Address::generate(&env);
+        let confirmer = Address::generate(&env);
+        
+        // Create new waste
+        let mut waste = WasteBuilder::new(
+            1u128,
+            WasteType::Plastic,
+            5000u128,
+            owner1.clone(),
+        )
+        .location(40_748_817, -73_985_428)
+        .build();
+
+        assert!(waste.is_active);
+        assert!(!waste.is_confirmed);
+        assert!(!waste.is_recycled());
+        assert_eq!(waste.current_owner, owner1);
+
+        // Confirm the waste
+        waste.confirm(confirmer);
+        assert!(waste.is_confirmed);
+
+        // Transfer ownership
+        waste.transfer_to(owner2.clone());
+        assert_eq!(waste.current_owner, owner2);
+
+        // Update location
+        waste.update_location(51_507_351, -141_278);
+        assert_eq!(waste.latitude, 51_507_351);
+        assert_eq!(waste.longitude, -141_278);
+
+        // Mark as recycled
+        waste.mark_recycled(1234567890);
+        assert!(waste.is_recycled());
+
+        // Deactivate
+        waste.deactivate();
+        assert!(!waste.is_active);
     }
 }
