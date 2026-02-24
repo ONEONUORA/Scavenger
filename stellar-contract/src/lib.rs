@@ -2,7 +2,7 @@
 
 mod types;
 
-pub use types::{Incentive, Material, ParticipantRole, RecyclingStats, WasteTransfer, WasteType};
+pub use types::{Incentive, Material, ParticipantRole, RecyclingStats, Waste, WasteTransfer, WasteType};
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Vec};
 
@@ -276,6 +276,57 @@ impl ScavengerContract {
         env.storage().instance().set(&("stats", submitter), &stats);
 
         material
+    }
+
+    /// Register new waste with location data
+    pub fn recycle_waste(
+        env: Env,
+        waste_type: WasteType,
+        weight: u128,
+        recycler: Address,
+        latitude: i128,
+        longitude: i128,
+    ) -> u128 {
+        recycler.require_auth();
+
+        if !Self::is_participant_registered(env.clone(), recycler.clone()) {
+            panic!("Participant not registered");
+        }
+
+        let waste_id = Self::next_waste_id(&env) as u128;
+        let timestamp = env.ledger().timestamp();
+
+        let waste = types::Waste::new(
+            waste_id,
+            waste_type,
+            weight,
+            recycler.clone(),
+            latitude,
+            longitude,
+            timestamp,
+            true,
+            false,
+            recycler.clone(),
+        );
+
+        env.storage().instance().set(&("waste_v2", waste_id), &waste);
+
+        let mut waste_list: Vec<u128> = env
+            .storage()
+            .instance()
+            .get(&("participant_wastes", recycler.clone()))
+            .unwrap_or(Vec::new(&env));
+        waste_list.push_back(waste_id);
+        env.storage()
+            .instance()
+            .set(&("participant_wastes", recycler.clone()), &waste_list);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("recycled"), waste_id),
+            (waste_type, weight, recycler, latitude, longitude, timestamp),
+        );
+
+        waste_id
     }
 
     /// Batch submit multiple materials for recycling
@@ -955,6 +1006,28 @@ mod test {
         assert_eq!(material.weight, 5000);
         assert_eq!(material.submitter, user);
         assert!(!material.verified);
+    }
+
+    #[test]
+    fn test_recycle_waste() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let recycler = Address::generate(&env);
+        env.mock_all_auths();
+
+        client.register_participant(&recycler, &ParticipantRole::Recycler);
+
+        let waste_id = client.recycle_waste(
+            &WasteType::Plastic,
+            &2500,
+            &recycler,
+            &40_500_000,
+            &-74_000_000,
+        );
+
+        assert_eq!(waste_id, 1);
     }
 
     #[test]
