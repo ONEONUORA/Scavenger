@@ -20,6 +20,13 @@ pub struct Participant {
     pub registered_at: u64,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticipantInfo {
+    pub participant: Participant,
+    pub stats: RecyclingStats,
+}
+
 #[contract]
 pub struct ScavengerContract;
 
@@ -254,6 +261,20 @@ impl ScavengerContract {
     pub fn get_participant(env: Env, address: Address) -> Option<Participant> {
         let key = (address,);
         env.storage().instance().get(&key)
+    }
+
+    /// Get participant information with current statistics
+    /// Returns participant details along with their recycling statistics
+    /// Returns None if participant is not registered
+    pub fn get_participant_info(env: Env, address: Address) -> Option<ParticipantInfo> {
+        let participant = Self::get_participant(env.clone(), address.clone())?;
+        let stats = Self::get_stats(env, address.clone())
+            .unwrap_or_else(|| RecyclingStats::new(address));
+        
+        Some(ParticipantInfo {
+            participant,
+            stats,
+        })
     }
 
     /// Update participant role
@@ -600,29 +621,9 @@ impl ScavengerContract {
 
     // ========== Incentive Storage Functions ==========
 
-    /// Store an incentive record by ID
-    /// Internal helper function for efficient incentive storage
-    fn set_incentive(env: &Env, incentive_id: u64, incentive: &Incentive) {
-        let key = ("incentive", incentive_id);
-        env.storage().instance().set(&key, incentive);
-    }
-
-    /// Retrieve an incentive record by ID
-    /// Returns None if incentive doesn't exist
-    fn get_incentive(env: &Env, incentive_id: u64) -> Option<Incentive> {
-        let key = ("incentive", incentive_id);
-        env.storage().instance().get(&key)
-    }
-
-    /// Check if an incentive record exists
-    pub fn incentive_exists(env: Env, incentive_id: u64) -> bool {
-        let key = ("incentive", incentive_id);
-        env.storage().instance().has(&key)
-    }
-
     /// Get incentive by ID (public getter)
     pub fn get_incentive_by_id(env: Env, incentive_id: u64) -> Option<Incentive> {
-        Self::get_incentive(&env, incentive_id)
+        Self::get_incentive_internal(&env, incentive_id)
     }
 
     /// Get all incentive IDs created by a specific rewarder (manufacturer)
@@ -696,7 +697,7 @@ impl ScavengerContract {
     pub fn deactivate_incentive(env: Env, incentive_id: u64, rewarder: Address) -> Incentive {
         rewarder.require_auth();
 
-        let mut incentive = Self::get_incentive(&env, incentive_id).expect("Incentive not found");
+        let mut incentive = Self::get_incentive_internal(&env, incentive_id).expect("Incentive not found");
 
         // Verify caller is the creator
         if incentive.rewarder != rewarder {
@@ -731,7 +732,7 @@ impl ScavengerContract {
         }
 
         // Get incentive
-        let mut incentive = Self::get_incentive(&env, incentive_id).expect("Incentive not found");
+        let mut incentive = Self::get_incentive_internal(&env, incentive_id).expect("Incentive not found");
 
         // Verify waste types match
         if incentive.waste_type != material.waste_type {
@@ -759,156 +760,6 @@ impl ScavengerContract {
         reward
     }
 
-    /// Create a new incentive program
-    /// Only manufacturers can create incentives
-    pub fn create_incentive(
-        env: Env,
-        manufacturer: Address,
-        waste_type: WasteType,
-        reward_amount: u64,
-    ) -> Incentive {
-        manufacturer.require_auth();
-
-        // Verify manufacturer has Manufacturer role
-        let manufacturer_key = (manufacturer.clone(),);
-        let participant: Participant = env
-            .storage()
-            .instance()
-            .get(&manufacturer_key)
-            .expect("Manufacturer not registered");
-
-        if !participant.role.can_manufacture() {
-            panic!("Only manufacturers can create incentives");
-        }
-
-        // Validate reward amount
-        if reward_amount == 0 {
-            panic!("Reward amount must be greater than zero");
-        }
-
-        // Generate next incentive ID
-        let incentive_id = Self::next_incentive_id(&env);
-
-        // Create incentive
-        let incentive = Incentive::new(
-            incentive_id,
-            manufacturer,
-            waste_type,
-            reward_amount,
-            env.ledger().timestamp(),
-        );
-
-        // Store incentive
-        Self::set_incentive(&env, incentive_id, &incentive);
-
-        incentive
-    }
-
-    /// Get incentive by ID
-    pub fn get_incentive(env: Env, incentive_id: u64) -> Option<Incentive> {
-        Self::get_incentive_internal(&env, incentive_id)
-    }
-
-    /// Check if an incentive exists
-    pub fn incentive_exists(env: Env, incentive_id: u64) -> bool {
-        let key = ("incentive", incentive_id);
-        env.storage().instance().has(&key)
-    }
-
-    /// Get multiple incentives by IDs (batch retrieval)
-    pub fn get_incentives_batch(
-        env: Env,
-        incentive_ids: soroban_sdk::Vec<u64>,
-    ) -> soroban_sdk::Vec<Option<Incentive>> {
-        let mut results = soroban_sdk::Vec::new(&env);
-        
-        for incentive_id in incentive_ids.iter() {
-            results.push_back(Self::get_incentive_internal(&env, incentive_id));
-        }
-        
-        results
-    }
-
-    /// Deactivate an incentive
-    /// Only the manufacturer who created the incentive can deactivate it
-    pub fn deactivate_incentive(
-        env: Env,
-        incentive_id: u64,
-        manufacturer: Address,
-    ) -> Incentive {
-        manufacturer.require_auth();
-
-        // Retrieve incentive
-        let mut incentive: Incentive = Self::get_incentive_internal(&env, incentive_id)
-            .expect("Incentive not found");
-
-        // Verify manufacturer matches
-        if incentive.manufacturer != manufacturer {
-            panic!("Only the incentive creator can modify this incentive");
-        }
-
-        // Deactivate
-        incentive.deactivate();
-        Self::set_incentive(&env, incentive_id, &incentive);
-
-        incentive
-    }
-
-    /// Activate an incentive
-    /// Only the manufacturer who created the incentive can activate it
-    pub fn activate_incentive(
-        env: Env,
-        incentive_id: u64,
-        manufacturer: Address,
-    ) -> Incentive {
-        manufacturer.require_auth();
-
-        // Retrieve incentive
-        let mut incentive: Incentive = Self::get_incentive_internal(&env, incentive_id)
-            .expect("Incentive not found");
-
-        // Verify manufacturer matches
-        if incentive.manufacturer != manufacturer {
-            panic!("Only the incentive creator can modify this incentive");
-        }
-
-        // Activate
-        incentive.activate();
-        Self::set_incentive(&env, incentive_id, &incentive);
-
-        incentive
-    }
-
-    /// Update incentive reward amount
-    /// Only the manufacturer who created the incentive can update it
-    pub fn update_incentive_reward(
-        env: Env,
-        incentive_id: u64,
-        manufacturer: Address,
-        new_reward_amount: u64,
-    ) -> Incentive {
-        manufacturer.require_auth();
-
-        // Validate new reward amount
-        if new_reward_amount == 0 {
-            panic!("Reward amount must be greater than zero");
-        }
-
-        // Retrieve incentive
-        let mut incentive: Incentive = Self::get_incentive_internal(&env, incentive_id)
-            .expect("Incentive not found");
-
-        // Verify manufacturer matches
-        if incentive.manufacturer != manufacturer {
-            panic!("Only the incentive creator can modify this incentive");
-        }
-
-        // Update reward amount
-        incentive.reward_amount = new_reward_amount;
-        Self::set_incentive(&env, incentive_id, &incentive);
-
-        incentive
-    }
 }
 
 #[cfg(test)]
