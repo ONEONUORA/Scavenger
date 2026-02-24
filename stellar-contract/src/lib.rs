@@ -2,7 +2,7 @@
 
 mod types;
 
-pub use types::{Material, ParticipantRole, RecyclingStats, WasteType};
+pub use types::{Incentive, Material, ParticipantRole, RecyclingStats, WasteType};
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
 
@@ -84,6 +84,20 @@ impl ScavengerContract {
         let next_id = count + 1;
         env.storage().instance().set(&("incentive_count",), &next_id);
         next_id
+    }
+
+    /// Store an incentive record by ID
+    /// Internal helper function for efficient incentive storage
+    fn set_incentive(env: &Env, incentive_id: u64, incentive: &Incentive) {
+        let key = ("incentive", incentive_id);
+        env.storage().instance().set(&key, incentive);
+    }
+
+    /// Retrieve an incentive record by ID
+    /// Returns None if incentive doesn't exist
+    fn get_incentive_internal(env: &Env, incentive_id: u64) -> Option<Incentive> {
+        let key = ("incentive", incentive_id);
+        env.storage().instance().get(&key)
     }
 
     /// Get participant information
@@ -392,6 +406,157 @@ impl ScavengerContract {
         } else {
             false
         }
+    }
+
+    /// Create a new incentive program
+    /// Only manufacturers can create incentives
+    pub fn create_incentive(
+        env: Env,
+        manufacturer: Address,
+        waste_type: WasteType,
+        reward_amount: u64,
+    ) -> Incentive {
+        manufacturer.require_auth();
+
+        // Verify manufacturer has Manufacturer role
+        let manufacturer_key = (manufacturer.clone(),);
+        let participant: Participant = env
+            .storage()
+            .instance()
+            .get(&manufacturer_key)
+            .expect("Manufacturer not registered");
+
+        if !participant.role.can_manufacture() {
+            panic!("Only manufacturers can create incentives");
+        }
+
+        // Validate reward amount
+        if reward_amount == 0 {
+            panic!("Reward amount must be greater than zero");
+        }
+
+        // Generate next incentive ID
+        let incentive_id = Self::next_incentive_id(&env);
+
+        // Create incentive
+        let incentive = Incentive::new(
+            incentive_id,
+            manufacturer,
+            waste_type,
+            reward_amount,
+            env.ledger().timestamp(),
+        );
+
+        // Store incentive
+        Self::set_incentive(&env, incentive_id, &incentive);
+
+        incentive
+    }
+
+    /// Get incentive by ID
+    pub fn get_incentive(env: Env, incentive_id: u64) -> Option<Incentive> {
+        Self::get_incentive_internal(&env, incentive_id)
+    }
+
+    /// Check if an incentive exists
+    pub fn incentive_exists(env: Env, incentive_id: u64) -> bool {
+        let key = ("incentive", incentive_id);
+        env.storage().instance().has(&key)
+    }
+
+    /// Get multiple incentives by IDs (batch retrieval)
+    pub fn get_incentives_batch(
+        env: Env,
+        incentive_ids: soroban_sdk::Vec<u64>,
+    ) -> soroban_sdk::Vec<Option<Incentive>> {
+        let mut results = soroban_sdk::Vec::new(&env);
+        
+        for incentive_id in incentive_ids.iter() {
+            results.push_back(Self::get_incentive_internal(&env, incentive_id));
+        }
+        
+        results
+    }
+
+    /// Deactivate an incentive
+    /// Only the manufacturer who created the incentive can deactivate it
+    pub fn deactivate_incentive(
+        env: Env,
+        incentive_id: u64,
+        manufacturer: Address,
+    ) -> Incentive {
+        manufacturer.require_auth();
+
+        // Retrieve incentive
+        let mut incentive: Incentive = Self::get_incentive_internal(&env, incentive_id)
+            .expect("Incentive not found");
+
+        // Verify manufacturer matches
+        if incentive.manufacturer != manufacturer {
+            panic!("Only the incentive creator can modify this incentive");
+        }
+
+        // Deactivate
+        incentive.deactivate();
+        Self::set_incentive(&env, incentive_id, &incentive);
+
+        incentive
+    }
+
+    /// Activate an incentive
+    /// Only the manufacturer who created the incentive can activate it
+    pub fn activate_incentive(
+        env: Env,
+        incentive_id: u64,
+        manufacturer: Address,
+    ) -> Incentive {
+        manufacturer.require_auth();
+
+        // Retrieve incentive
+        let mut incentive: Incentive = Self::get_incentive_internal(&env, incentive_id)
+            .expect("Incentive not found");
+
+        // Verify manufacturer matches
+        if incentive.manufacturer != manufacturer {
+            panic!("Only the incentive creator can modify this incentive");
+        }
+
+        // Activate
+        incentive.activate();
+        Self::set_incentive(&env, incentive_id, &incentive);
+
+        incentive
+    }
+
+    /// Update incentive reward amount
+    /// Only the manufacturer who created the incentive can update it
+    pub fn update_incentive_reward(
+        env: Env,
+        incentive_id: u64,
+        manufacturer: Address,
+        new_reward_amount: u64,
+    ) -> Incentive {
+        manufacturer.require_auth();
+
+        // Validate new reward amount
+        if new_reward_amount == 0 {
+            panic!("Reward amount must be greater than zero");
+        }
+
+        // Retrieve incentive
+        let mut incentive: Incentive = Self::get_incentive_internal(&env, incentive_id)
+            .expect("Incentive not found");
+
+        // Verify manufacturer matches
+        if incentive.manufacturer != manufacturer {
+            panic!("Only the incentive creator can modify this incentive");
+        }
+
+        // Update reward amount
+        incentive.reward_amount = new_reward_amount;
+        Self::set_incentive(&env, incentive_id, &incentive);
+
+        incentive
     }
 }
 
@@ -1448,5 +1613,299 @@ mod test {
         assert_eq!(p1.unwrap().role, ParticipantRole::Recycler);
         assert_eq!(p2.unwrap().role, ParticipantRole::Collector);
         assert_eq!(p3.unwrap().role, ParticipantRole::Manufacturer);
+    }
+
+    // Incentive Tests
+    #[test]
+    fn test_create_incentive() {
+        let env = Env::default();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1234567890;
+        });
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let manufacturer = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Register manufacturer
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+
+        // Create incentive
+        let incentive = client.create_incentive(
+            &manufacturer,
+            &WasteType::PetPlastic,
+            &50,
+        );
+
+        assert_eq!(incentive.id, 1);
+        assert_eq!(incentive.manufacturer, manufacturer);
+        assert_eq!(incentive.waste_type, WasteType::PetPlastic);
+        assert_eq!(incentive.reward_amount, 50);
+        assert!(incentive.active);
+        assert_eq!(incentive.created_at, 1234567890);
+    }
+
+    #[test]
+    fn test_get_incentive() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let manufacturer = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Register manufacturer
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+
+        // Create incentive
+        client.create_incentive(&manufacturer, &WasteType::Metal, &100);
+
+        // Retrieve incentive
+        let incentive = client.get_incentive(&1);
+        assert!(incentive.is_some());
+        let incentive = incentive.unwrap();
+        assert_eq!(incentive.id, 1);
+        assert_eq!(incentive.waste_type, WasteType::Metal);
+        assert_eq!(incentive.reward_amount, 100);
+    }
+
+    #[test]
+    fn test_incentive_exists() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let manufacturer = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Check non-existent incentive
+        assert!(!client.incentive_exists(&1));
+
+        // Register manufacturer and create incentive
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+        client.create_incentive(&manufacturer, &WasteType::Paper, &25);
+
+        // Check existing incentive
+        assert!(client.incentive_exists(&1));
+        assert!(!client.incentive_exists(&2));
+    }
+
+    #[test]
+    fn test_multiple_incentives_per_manufacturer() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let manufacturer = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Register manufacturer
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+
+        // Create multiple incentives
+        let inc1 = client.create_incentive(&manufacturer, &WasteType::Paper, &10);
+        let inc2 = client.create_incentive(&manufacturer, &WasteType::Plastic, &20);
+        let inc3 = client.create_incentive(&manufacturer, &WasteType::Metal, &30);
+
+        // Verify unique IDs
+        assert_eq!(inc1.id, 1);
+        assert_eq!(inc2.id, 2);
+        assert_eq!(inc3.id, 3);
+
+        // Verify all are retrievable
+        assert!(client.get_incentive(&1).is_some());
+        assert!(client.get_incentive(&2).is_some());
+        assert!(client.get_incentive(&3).is_some());
+    }
+
+    #[test]
+    fn test_get_incentives_batch() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let manufacturer = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Register manufacturer
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+
+        // Create multiple incentives
+        client.create_incentive(&manufacturer, &WasteType::Paper, &10);
+        client.create_incentive(&manufacturer, &WasteType::Plastic, &20);
+        client.create_incentive(&manufacturer, &WasteType::Metal, &30);
+
+        // Batch retrieve
+        let mut ids = soroban_sdk::Vec::new(&env);
+        ids.push_back(1);
+        ids.push_back(2);
+        ids.push_back(3);
+        ids.push_back(99); // Non-existent
+
+        let results = client.get_incentives_batch(&ids);
+        assert_eq!(results.len(), 4);
+        assert!(results.get(0).unwrap().is_some());
+        assert!(results.get(1).unwrap().is_some());
+        assert!(results.get(2).unwrap().is_some());
+        assert!(results.get(3).unwrap().is_none());
+
+        // Verify correct data
+        let inc1 = results.get(0).unwrap().unwrap();
+        assert_eq!(inc1.waste_type, WasteType::Paper);
+        assert_eq!(inc1.reward_amount, 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only manufacturers can create incentives")]
+    fn test_only_manufacturer_can_create_incentive() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let recycler = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Register as recycler (not manufacturer)
+        client.register_participant(&recycler, &ParticipantRole::Recycler);
+
+        // Attempt to create incentive - should panic
+        client.create_incentive(&recycler, &WasteType::Paper, &10);
+    }
+
+    #[test]
+    #[should_panic(expected = "Reward amount must be greater than zero")]
+    fn test_incentive_zero_reward_rejected() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let manufacturer = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Register manufacturer
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+
+        // Attempt to create incentive with zero reward - should panic
+        client.create_incentive(&manufacturer, &WasteType::Paper, &0);
+    }
+
+    #[test]
+    fn test_incentive_storage_compatibility() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let manufacturer = Address::generate(&env);
+
+        let incentive = Incentive::new(
+            1,
+            manufacturer.clone(),
+            WasteType::Glass,
+            75,
+            1234567890,
+        );
+
+        // Test that Incentive can be stored in Soroban storage
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&("incentive", 1u64), &incentive);
+            let retrieved: Incentive = env.storage().instance().get(&("incentive", 1u64)).unwrap();
+            
+            assert_eq!(retrieved.id, incentive.id);
+            assert_eq!(retrieved.manufacturer, incentive.manufacturer);
+            assert_eq!(retrieved.waste_type, incentive.waste_type);
+            assert_eq!(retrieved.reward_amount, incentive.reward_amount);
+            assert_eq!(retrieved.active, incentive.active);
+            assert_eq!(retrieved.created_at, incentive.created_at);
+        });
+    }
+
+    #[test]
+    fn test_deactivate_incentive() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let manufacturer = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Register manufacturer and create incentive
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+        let incentive = client.create_incentive(&manufacturer, &WasteType::Paper, &25);
+        assert!(incentive.active);
+
+        // Deactivate incentive
+        let deactivated = client.deactivate_incentive(&1, &manufacturer);
+        assert!(!deactivated.active);
+
+        // Verify persistence
+        let retrieved = client.get_incentive(&1).unwrap();
+        assert!(!retrieved.active);
+    }
+
+    #[test]
+    fn test_activate_incentive() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let manufacturer = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Register manufacturer and create incentive
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+        client.create_incentive(&manufacturer, &WasteType::Paper, &25);
+
+        // Deactivate then reactivate
+        client.deactivate_incentive(&1, &manufacturer);
+        let reactivated = client.activate_incentive(&1, &manufacturer);
+        assert!(reactivated.active);
+
+        // Verify persistence
+        let retrieved = client.get_incentive(&1).unwrap();
+        assert!(retrieved.active);
+    }
+
+    #[test]
+    fn test_update_incentive_reward() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let manufacturer = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Register manufacturer and create incentive
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+        let incentive = client.create_incentive(&manufacturer, &WasteType::Metal, &50);
+        assert_eq!(incentive.reward_amount, 50);
+
+        // Update reward amount
+        let updated = client.update_incentive_reward(&1, &manufacturer, &100);
+        assert_eq!(updated.reward_amount, 100);
+
+        // Verify persistence
+        let retrieved = client.get_incentive(&1).unwrap();
+        assert_eq!(retrieved.reward_amount, 100);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the incentive creator can modify this incentive")]
+    fn test_unauthorized_incentive_modification() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let manufacturer1 = Address::generate(&env);
+        let manufacturer2 = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Register both manufacturers
+        client.register_participant(&manufacturer1, &ParticipantRole::Manufacturer);
+        client.register_participant(&manufacturer2, &ParticipantRole::Manufacturer);
+
+        // Manufacturer 1 creates incentive
+        client.create_incentive(&manufacturer1, &WasteType::Paper, &25);
+
+        // Manufacturer 2 tries to deactivate - should panic
+        client.deactivate_incentive(&1, &manufacturer2);
     }
 }

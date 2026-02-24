@@ -307,6 +307,71 @@ impl RecyclingStats {
     }
 }
 
+/// Represents an incentive program created by a manufacturer
+/// to encourage collection of specific waste types
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Incentive {
+    /// Unique identifier for the incentive
+    pub id: u64,
+    /// Address of the manufacturer who created the incentive
+    pub manufacturer: Address,
+    /// Type of waste material this incentive applies to
+    pub waste_type: WasteType,
+    /// Bonus reward points per kilogram of matching material
+    pub reward_amount: u64,
+    /// Whether the incentive is currently active
+    pub active: bool,
+    /// Timestamp when the incentive was created
+    pub created_at: u64,
+}
+
+impl Incentive {
+    /// Creates a new Incentive instance
+    pub fn new(
+        id: u64,
+        manufacturer: Address,
+        waste_type: WasteType,
+        reward_amount: u64,
+        created_at: u64,
+    ) -> Self {
+        Self {
+            id,
+            manufacturer,
+            waste_type,
+            reward_amount,
+            active: true,
+            created_at,
+        }
+    }
+
+    /// Checks if the incentive is currently active
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Deactivates the incentive
+    pub fn deactivate(&mut self) {
+        self.active = false;
+    }
+
+    /// Activates the incentive
+    pub fn activate(&mut self) {
+        self.active = true;
+    }
+
+    /// Checks if the incentive applies to a given waste type
+    pub fn matches_waste_type(&self, waste_type: WasteType) -> bool {
+        self.waste_type == waste_type
+    }
+
+    /// Calculates bonus points for a given material weight
+    /// Returns: (weight_in_kg * reward_amount)
+    pub fn calculate_bonus_points(&self, weight_grams: u64) -> u64 {
+        (weight_grams / 1000) * self.reward_amount
+    }
+}
+
 #[cfg(test)]
 mod recycling_stats_tests {
     use super::*;
