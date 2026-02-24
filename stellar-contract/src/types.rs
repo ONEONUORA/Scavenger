@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, String};
+use soroban_sdk::{contracttype, Address, String, Symbol};
 
 /// Represents the role of a participant in the Scavenger ecosystem
 #[contracttype]
@@ -196,6 +196,83 @@ impl Material {
         
         // Points = (weight in kg) * multiplier * 10
         (self.weight / 1000) * multiplier * 10
+    }
+}
+
+/// Represents a waste transfer in the supply chain
+/// Tracks the movement of waste materials between participants
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WasteTransfer {
+    /// Unique identifier for the waste being transferred
+    pub waste_id: u128,
+    /// Address of the sender
+    pub from: Address,
+    /// Address of the receiver
+    pub to: Address,
+    /// Timestamp when the transfer occurred
+    pub timestamp: u64,
+    /// Latitude coordinate (scaled by 1e6 for precision)
+    pub latitude: i128,
+    /// Longitude coordinate (scaled by 1e6 for precision)
+    pub longitude: i128,
+    /// Additional notes about the transfer
+    pub notes: Symbol,
+}
+
+impl WasteTransfer {
+    /// Creates a new WasteTransfer instance
+    pub fn new(
+        waste_id: u128,
+        from: Address,
+        to: Address,
+        timestamp: u64,
+        latitude: i128,
+        longitude: i128,
+        notes: Symbol,
+    ) -> Self {
+        Self {
+            waste_id,
+            from,
+            to,
+            timestamp,
+            latitude,
+            longitude,
+            notes,
+        }
+    }
+
+    /// Validates that the transfer has valid coordinates
+    /// Latitude should be between -90 and 90 degrees (scaled by 1e6)
+    /// Longitude should be between -180 and 180 degrees (scaled by 1e6)
+    pub fn has_valid_coordinates(&self) -> bool {
+        let max_lat = 90_000_000i128;  // 90 degrees * 1e6
+        let max_lon = 180_000_000i128; // 180 degrees * 1e6
+        
+        self.latitude >= -max_lat 
+            && self.latitude <= max_lat
+            && self.longitude >= -max_lon
+            && self.longitude <= max_lon
+    }
+
+    /// Checks if the transfer is recent (within last 24 hours)
+    pub fn is_recent(&self, current_timestamp: u64) -> bool {
+        const DAY_IN_SECONDS: u64 = 86400;
+        current_timestamp.saturating_sub(self.timestamp) <= DAY_IN_SECONDS
+    }
+
+    /// Calculates the distance between two transfers using simplified distance formula
+    /// Returns approximate distance in meters (simplified calculation)
+    pub fn distance_from(&self, other: &WasteTransfer) -> u128 {
+        let lat_diff = (self.latitude - other.latitude).abs() as u128;
+        let lon_diff = (self.longitude - other.longitude).abs() as u128;
+        
+        // Simplified distance: sqrt(lat_diff^2 + lon_diff^2)
+        // Using approximation: max(lat_diff, lon_diff) + min(lat_diff, lon_diff)/2
+        let max_diff = if lat_diff > lon_diff { lat_diff } else { lon_diff };
+        let min_diff = if lat_diff < lon_diff { lat_diff } else { lon_diff };
+        
+        max_diff + min_diff / 2
     }
 }
 
@@ -627,9 +704,6 @@ mod waste_type_tests {
 
     #[test]
     fn test_waste_type_display() {
-        use soroban_sdk::String as SorobanString;
-        let env = soroban_sdk::Env::default();
-        
         // Test Display trait by converting to string representation
         assert_eq!(WasteType::Paper.as_str(), "PAPER");
         assert_eq!(WasteType::PetPlastic.as_str(), "PETPLASTIC");
@@ -772,5 +846,469 @@ mod tests {
         assert_eq!(ParticipantRole::Recycler, ParticipantRole::Recycler);
         assert_ne!(ParticipantRole::Recycler, ParticipantRole::Collector);
         assert_ne!(ParticipantRole::Collector, ParticipantRole::Manufacturer);
+    }
+}
+
+#[cfg(test)]
+mod waste_transfer_tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::symbol_short;
+
+    #[test]
+    fn test_waste_transfer_creation() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let notes = symbol_short!("TRANSFER");
+        
+        let transfer = WasteTransfer::new(
+            1u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            40_748_817,  // NYC latitude * 1e6
+            -73_985_428, // NYC longitude * 1e6
+            notes.clone(),
+        );
+
+        assert_eq!(transfer.waste_id, 1);
+        assert_eq!(transfer.from, from);
+        assert_eq!(transfer.to, to);
+        assert_eq!(transfer.timestamp, 1234567890);
+        assert_eq!(transfer.latitude, 40_748_817);
+        assert_eq!(transfer.longitude, -73_985_428);
+        assert_eq!(transfer.notes, notes);
+    }
+
+    #[test]
+    fn test_waste_transfer_valid_coordinates() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let notes = symbol_short!("VALID");
+        
+        // Valid coordinates
+        let valid_transfer = WasteTransfer::new(
+            1u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            45_000_000,  // 45 degrees N
+            90_000_000,  // 90 degrees E
+            notes.clone(),
+        );
+        assert!(valid_transfer.has_valid_coordinates());
+
+        // Edge case: North Pole
+        let north_pole = WasteTransfer::new(
+            2u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            90_000_000,  // 90 degrees N
+            0,
+            notes.clone(),
+        );
+        assert!(north_pole.has_valid_coordinates());
+
+        // Edge case: South Pole
+        let south_pole = WasteTransfer::new(
+            3u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            -90_000_000, // 90 degrees S
+            0,
+            notes.clone(),
+        );
+        assert!(south_pole.has_valid_coordinates());
+
+        // Edge case: International Date Line
+        let date_line = WasteTransfer::new(
+            4u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            0,
+            180_000_000, // 180 degrees E
+            notes.clone(),
+        );
+        assert!(date_line.has_valid_coordinates());
+
+        // Invalid: Latitude too high
+        let invalid_lat = WasteTransfer::new(
+            5u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            91_000_000,  // 91 degrees N (invalid)
+            0,
+            notes.clone(),
+        );
+        assert!(!invalid_lat.has_valid_coordinates());
+
+        // Invalid: Longitude too high
+        let invalid_lon = WasteTransfer::new(
+            6u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            0,
+            181_000_000, // 181 degrees E (invalid)
+            notes,
+        );
+        assert!(!invalid_lon.has_valid_coordinates());
+    }
+
+    #[test]
+    fn test_waste_transfer_is_recent() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let notes = symbol_short!("RECENT");
+        
+        let current_time = 1234567890u64;
+        
+        // Transfer from 1 hour ago (recent)
+        let recent_transfer = WasteTransfer::new(
+            1u128,
+            from.clone(),
+            to.clone(),
+            current_time - 3600, // 1 hour ago
+            0,
+            0,
+            notes.clone(),
+        );
+        assert!(recent_transfer.is_recent(current_time));
+
+        // Transfer from 23 hours ago (still recent)
+        let almost_day = WasteTransfer::new(
+            2u128,
+            from.clone(),
+            to.clone(),
+            current_time - 82800, // 23 hours ago
+            0,
+            0,
+            notes.clone(),
+        );
+        assert!(almost_day.is_recent(current_time));
+
+        // Transfer from exactly 24 hours ago (still recent)
+        let exactly_day = WasteTransfer::new(
+            3u128,
+            from.clone(),
+            to.clone(),
+            current_time - 86400, // 24 hours ago
+            0,
+            0,
+            notes.clone(),
+        );
+        assert!(exactly_day.is_recent(current_time));
+
+        // Transfer from 25 hours ago (not recent)
+        let old_transfer = WasteTransfer::new(
+            4u128,
+            from.clone(),
+            to.clone(),
+            current_time - 90000, // 25 hours ago
+            0,
+            0,
+            notes.clone(),
+        );
+        assert!(!old_transfer.is_recent(current_time));
+
+        // Transfer from 1 week ago (not recent)
+        let very_old = WasteTransfer::new(
+            5u128,
+            from,
+            to,
+            current_time - 604800, // 1 week ago
+            0,
+            0,
+            notes,
+        );
+        assert!(!very_old.is_recent(current_time));
+    }
+
+    #[test]
+    fn test_waste_transfer_distance_calculation() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let notes = symbol_short!("DISTANCE");
+        
+        // Transfer at origin
+        let transfer1 = WasteTransfer::new(
+            1u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            0,
+            0,
+            notes.clone(),
+        );
+
+        // Transfer 10 degrees away (both lat and lon)
+        let transfer2 = WasteTransfer::new(
+            2u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            10_000_000,
+            10_000_000,
+            notes.clone(),
+        );
+
+        let distance = transfer1.distance_from(&transfer2);
+        assert!(distance > 0);
+
+        // Same location should have zero distance
+        let transfer3 = WasteTransfer::new(
+            3u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            0,
+            0,
+            notes,
+        );
+        assert_eq!(transfer1.distance_from(&transfer3), 0);
+
+        // Distance should be symmetric
+        assert_eq!(transfer1.distance_from(&transfer2), transfer2.distance_from(&transfer1));
+    }
+
+    #[test]
+    fn test_waste_transfer_storage_compatibility() {
+        let env = soroban_sdk::Env::default();
+        let contract_id = env.register_contract(None, crate::ScavengerContract);
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let notes = symbol_short!("STORAGE");
+        
+        let transfer = WasteTransfer::new(
+            12345u128,
+            from,
+            to,
+            1234567890,
+            40_748_817,
+            -73_985_428,
+            notes,
+        );
+
+        // Test that WasteTransfer can be stored in Soroban storage
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&("transfer", 1u64), &transfer);
+            let retrieved: WasteTransfer = env.storage().instance().get(&("transfer", 1u64)).unwrap();
+            
+            assert_eq!(retrieved.waste_id, transfer.waste_id);
+            assert_eq!(retrieved.from, transfer.from);
+            assert_eq!(retrieved.to, transfer.to);
+            assert_eq!(retrieved.timestamp, transfer.timestamp);
+            assert_eq!(retrieved.latitude, transfer.latitude);
+            assert_eq!(retrieved.longitude, transfer.longitude);
+            assert_eq!(retrieved.notes, transfer.notes);
+        });
+    }
+
+    #[test]
+    fn test_waste_transfer_clone_and_equality() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let notes = symbol_short!("CLONE");
+        
+        let transfer1 = WasteTransfer::new(
+            1u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            0,
+            0,
+            notes.clone(),
+        );
+
+        let transfer2 = transfer1.clone();
+        assert_eq!(transfer1, transfer2);
+
+        // Different waste_id should not be equal
+        let transfer3 = WasteTransfer::new(
+            2u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            0,
+            0,
+            notes,
+        );
+        assert_ne!(transfer1, transfer3);
+    }
+
+    #[test]
+    fn test_waste_transfer_multiple_locations() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let notes = symbol_short!("MULTI");
+        
+        // New York
+        let nyc = WasteTransfer::new(
+            1u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            40_748_817,
+            -73_985_428,
+            notes.clone(),
+        );
+        assert!(nyc.has_valid_coordinates());
+
+        // London
+        let london = WasteTransfer::new(
+            2u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            51_507_351,
+            -141_278,
+            notes.clone(),
+        );
+        assert!(london.has_valid_coordinates());
+
+        // Tokyo
+        let tokyo = WasteTransfer::new(
+            3u128,
+            from.clone(),
+            to.clone(),
+            1234567890,
+            35_689_487,
+            139_691_706,
+            notes.clone(),
+        );
+        assert!(tokyo.has_valid_coordinates());
+
+        // Sydney
+        let sydney = WasteTransfer::new(
+            4u128,
+            from,
+            to,
+            1234567890,
+            -33_868_820,
+            151_209_290,
+            notes,
+        );
+        assert!(sydney.has_valid_coordinates());
+    }
+
+    #[test]
+    fn test_waste_transfer_timestamp_accuracy() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let notes = symbol_short!("TIME");
+        
+        let timestamp1 = 1234567890u64;
+        let timestamp2 = 1234567891u64;
+        
+        let transfer1 = WasteTransfer::new(
+            1u128,
+            from.clone(),
+            to.clone(),
+            timestamp1,
+            0,
+            0,
+            notes.clone(),
+        );
+
+        let transfer2 = WasteTransfer::new(
+            2u128,
+            from,
+            to,
+            timestamp2,
+            0,
+            0,
+            notes,
+        );
+
+        assert_eq!(transfer1.timestamp, timestamp1);
+        assert_eq!(transfer2.timestamp, timestamp2);
+        assert_ne!(transfer1.timestamp, transfer2.timestamp);
+    }
+
+    #[test]
+    fn test_waste_transfer_large_waste_id() {
+        let env = soroban_sdk::Env::default();
+        let contract_id = env.register_contract(None, crate::ScavengerContract);
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let notes = symbol_short!("LARGE");
+        
+        // Test with large u128 value
+        let large_id = u128::MAX;
+        let transfer = WasteTransfer::new(
+            large_id,
+            from,
+            to,
+            1234567890,
+            0,
+            0,
+            notes,
+        );
+
+        assert_eq!(transfer.waste_id, large_id);
+        
+        // Test storage with large ID
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&("transfer", 1u64), &transfer);
+            let retrieved: WasteTransfer = env.storage().instance().get(&("transfer", 1u64)).unwrap();
+            assert_eq!(retrieved.waste_id, large_id);
+        });
+    }
+
+    #[test]
+    fn test_waste_transfer_negative_coordinates() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let notes = symbol_short!("NEG");
+        
+        // Southern hemisphere, western hemisphere
+        let transfer = WasteTransfer::new(
+            1u128,
+            from,
+            to,
+            1234567890,
+            -33_868_820,  // South
+            -151_209_290, // West
+            notes,
+        );
+
+        assert!(transfer.has_valid_coordinates());
+        assert_eq!(transfer.latitude, -33_868_820);
+        assert_eq!(transfer.longitude, -151_209_290);
+    }
+
+    #[test]
+    fn test_waste_transfer_equator_and_prime_meridian() {
+        let env = soroban_sdk::Env::default();
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let notes = symbol_short!("ZERO");
+        
+        // Location at 0,0 (Gulf of Guinea)
+        let transfer = WasteTransfer::new(
+            1u128,
+            from,
+            to,
+            1234567890,
+            0,
+            0,
+            notes,
+        );
+
+        assert!(transfer.has_valid_coordinates());
+        assert_eq!(transfer.latitude, 0);
+        assert_eq!(transfer.longitude, 0);
     }
 }
