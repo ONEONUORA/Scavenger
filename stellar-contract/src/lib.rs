@@ -526,6 +526,39 @@ impl ScavengerContract {
         waste_id
     }
 
+    /// Confirm waste details
+    pub fn confirm_waste_details(
+        env: Env,
+        waste_id: u128,
+        confirmer: Address,
+    ) -> types::Waste {
+        confirmer.require_auth();
+
+        let mut waste: types::Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", waste_id))
+            .expect("Waste not found");
+
+        if waste.current_owner == confirmer {
+            panic!("Owner cannot confirm own waste");
+        }
+
+        if waste.is_confirmed {
+            panic!("Waste already confirmed");
+        }
+
+        waste.confirm(confirmer.clone());
+        env.storage().instance().set(&("waste_v2", waste_id), &waste);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("confirmed"), waste_id),
+            (confirmer, env.ledger().timestamp()),
+        );
+
+        waste
+    }
+
     /// Batch submit multiple materials for recycling
     /// More efficient than individual submissions
     pub fn submit_materials_batch(
@@ -1111,6 +1144,33 @@ mod test {
         );
 
         assert_eq!(waste_id, 1);
+    }
+
+    #[test]
+    fn test_confirm_waste_details() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let recycler = Address::generate(&env);
+        let verifier = Address::generate(&env);
+        env.mock_all_auths();
+
+        client.register_participant(&recycler, &ParticipantRole::Recycler);
+        client.register_participant(&verifier, &ParticipantRole::Collector);
+
+        let waste_id = client.recycle_waste(
+            &WasteType::Glass,
+            &1500,
+            &recycler,
+            &40_700_000,
+            &-73_900_000,
+        );
+
+        let waste = client.confirm_waste_details(&waste_id, &verifier);
+
+        assert!(waste.is_confirmed);
+        assert_eq!(waste.confirmer, verifier);
     }
 
     #[test]
