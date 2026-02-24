@@ -190,9 +190,9 @@ impl ScavengerContract {
         env.storage().instance().set(&key, material);
     }
 
-    /// Retrieve a waste record by ID
+    /// Retrieve a waste record by ID (internal helper)
     /// Returns None if waste doesn't exist
-    fn get_waste(env: &Env, waste_id: u64) -> Option<Material> {
+    fn get_waste_internal(env: &Env, waste_id: u64) -> Option<Material> {
         let key = ("waste", waste_id);
         env.storage().instance().get(&key)
     }
@@ -311,7 +311,7 @@ impl ScavengerContract {
         }
 
         // Get and update material
-        let mut material: Material = Self::get_waste(&env, waste_id).expect("Waste not found");
+        let mut material: Material = Self::get_waste_internal(&env, waste_id).expect("Waste not found");
 
         // Verify sender owns the waste
         if material.submitter != from {
@@ -449,14 +449,21 @@ impl ScavengerContract {
         results
     }
 
-    /// Get material by ID (alias for get_waste for backward compatibility)
+    /// Get material by ID (alias for backward compatibility)
     pub fn get_material(env: Env, material_id: u64) -> Option<Material> {
-        Self::get_waste(&env, material_id)
+        Self::get_waste(env, material_id)
     }
 
-    /// Get waste by ID
+    /// Get waste by ID (alias for backward compatibility)
     pub fn get_waste_by_id(env: Env, waste_id: u64) -> Option<Material> {
-        Self::get_waste(&env, waste_id)
+        Self::get_waste(env, waste_id)
+    }
+
+    /// Get waste by ID (primary public interface)
+    /// Returns the waste/material record if it exists, None otherwise
+    pub fn get_waste(env: Env, waste_id: u64) -> Option<Material> {
+        let key = ("waste", waste_id);
+        env.storage().instance().get(&key)
     }
 
     /// Get multiple wastes by IDs (batch retrieval)
@@ -467,7 +474,7 @@ impl ScavengerContract {
         let mut results = soroban_sdk::Vec::new(&env);
 
         for waste_id in waste_ids.iter() {
-            results.push_back(Self::get_waste(&env, waste_id));
+            results.push_back(Self::get_waste_internal(&env, waste_id));
         }
 
         results
@@ -491,7 +498,7 @@ impl ScavengerContract {
 
         // Get and verify material using new storage system
         let mut material: Material =
-            Self::get_waste(&env, material_id).expect("Material not found");
+            Self::get_waste_internal(&env, material_id).expect("Material not found");
 
         material.verify();
         Self::set_waste(&env, material_id, &material);
@@ -534,7 +541,7 @@ impl ScavengerContract {
         let mut results = soroban_sdk::Vec::new(&env);
 
         for material_id in material_ids.iter() {
-            if let Some(mut material) = Self::get_waste(&env, material_id) {
+            if let Some(mut material) = Self::get_waste_internal(&env, material_id) {
                 material.verify();
                 Self::set_waste(&env, material_id, &material);
 
@@ -683,7 +690,7 @@ impl ScavengerContract {
         claimer.require_auth();
 
         // Get material and verify it exists and is verified
-        let material = Self::get_waste(&env, material_id).expect("Material not found");
+        let material = Self::get_waste_internal(&env, material_id).expect("Material not found");
 
         if !material.verified {
             panic!("Material must be verified to claim incentive");
