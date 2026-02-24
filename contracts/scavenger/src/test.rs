@@ -511,3 +511,325 @@ fn test_all_role_types() {
     assert_eq!(p2.role, Role::Collector);
     assert_eq!(p3.role, Role::Manufacturer);
 }
+
+
+// Token Reward Distribution Tests
+
+use soroban_sdk::token;
+
+#[test]
+fn test_submit_material() {
+    let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
+    env.mock_all_auths();
+    client.__constructor(&admin, &token_address, &charity_address, &5, &50);
+    
+    let recycler = Address::generate(&env);
+    let name = String::from_str(&env, "Test Recycler");
+    client.register_participant(&recycler, &Role::Recycler, &name, &100, &200);
+    
+    let material = client.submit_material(&recycler, &WasteType::PetPlastic, &5000);
+    
+    assert_eq!(material.id, 1);
+    assert_eq!(material.waste_type, WasteType::PetPlastic);
+    assert_eq!(material.weight, 5000);
+    assert_eq!(material.submitter, recycler);
+    assert!(!material.verified);
+}
+
+#[test]
+fn test_transfer_waste() {
+    let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
+    env.mock_all_auths();
+    client.__constructor(&admin, &token_address, &charity_address, &5, &50);
+    
+    let recycler = Address::generate(&env);
+    let collector = Address::generate(&env);
+    let name1 = String::from_str(&env, "Recycler");
+    let name2 = String::from_str(&env, "Collector");
+    
+    client.register_participant(&recycler, &Role::Recycler, &name1, &100, &200);
+    client.register_participant(&collector, &Role::Collector, &name2, &300, &400);
+    
+    let material = client.submit_material(&recycler, &WasteType::Metal, &3000);
+    
+    client.transfer_waste(&material.id, &recycler, &collector);
+    
+    let history = client.get_transfer_history(&material.id);
+    assert_eq!(history.len(), 1);
+    assert_eq!(history.get(0).unwrap().from, recycler);
+    assert_eq!(history.get(0).unwrap().to, collector);
+}
+
+#[test]
+fn test_get_transfer_history() {
+    let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
+    env.mock_all_auths();
+    client.__constructor(&admin, &token_address, &charity_address, &5, &50);
+    
+    let recycler = Address::generate(&env);
+    let collector1 = Address::generate(&env);
+    let collector2 = Address::generate(&env);
+    
+    let name1 = String::from_str(&env, "Recycler");
+    let name2 = String::from_str(&env, "Collector 1");
+    let name3 = String::from_str(&env, "Collector 2");
+    
+    client.register_participant(&recycler, &Role::Recycler, &name1, &100, &200);
+    client.register_participant(&collector1, &Role::Collector, &name2, &300, &400);
+    client.register_participant(&collector2, &Role::Collector, &name3, &500, &600);
+    
+    let material = client.submit_material(&recycler, &WasteType::Glass, &2000);
+    
+    client.transfer_waste(&material.id, &recycler, &collector1);
+    client.transfer_waste(&material.id, &collector1, &collector2);
+    
+    let history = client.get_transfer_history(&material.id);
+    assert_eq!(history.len(), 2);
+    assert_eq!(history.get(0).unwrap().from, recycler);
+    assert_eq!(history.get(0).unwrap().to, collector1);
+    assert_eq!(history.get(1).unwrap().from, collector1);
+    assert_eq!(history.get(1).unwrap().to, collector2);
+}
+
+#[test]
+fn test_distribute_rewards_basic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    client.__constructor(&admin, &token_address, &charity_address, &5, &50);
+    
+    // Setup token contract
+    let token_admin = Address::generate(&env);
+    let token_client = token::StellarAssetClient::new(&env, &token_address);
+    token_client.mint(&token_admin, &admin, &1000000);
+    
+    // Register participants
+    let manufacturer = Address::generate(&env);
+    let recycler = Address::generate(&env);
+    let collector = Address::generate(&env);
+    
+    let name1 = String::from_str(&env, "Manufacturer");
+    let name2 = String::from_str(&env, "Recycler");
+    let name3 = String::from_str(&env, "Collector");
+    
+    client.register_participant(&manufacturer, &Role::Manufacturer, &name1, &100, &200);
+    client.register_participant(&recycler, &Role::Recycler, &name2, &300, &400);
+    client.register_participant(&collector, &Role::Collector, &name3, &500, &600);
+    
+    // Create incentive
+    let incentive = client.create_incentive(&manufacturer, &WasteType::PetPlastic, &100, &100000);
+    
+    // Submit and transfer material
+    let mut material = client.submit_material(&recycler, &WasteType::PetPlastic, &5000);
+    material.verified = true;
+    
+    client.transfer_waste(&material.id, &recycler, &collector);
+    
+    // Distribute rewards
+    let total = client.distribute_rewards(&material.id, &incentive.id, &manufacturer);
+    
+    // Total reward = 5kg * 100 points = 500
+    assert_eq!(total, 500);
+}
+
+#[test]
+fn test_distribute_rewards_percentages() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
+    // Set collector to 10% and owner to 40%
+    client.__constructor(&admin, &token_address, &charity_address, &10, &40);
+    
+    let manufacturer = Address::generate(&env);
+    let recycler = Address::generate(&env);
+    let collector = Address::generate(&env);
+    
+    let name1 = String::from_str(&env, "Manufacturer");
+    let name2 = String::from_str(&env, "Recycler");
+    let name3 = String::from_str(&env, "Collector");
+    
+    client.register_participant(&manufacturer, &Role::Manufacturer, &name1, &100, &200);
+    client.register_participant(&recycler, &Role::Recycler, &name2, &300, &400);
+    client.register_participant(&collector, &Role::Collector, &name3, &500, &600);
+    
+    let incentive = client.create_incentive(&manufacturer, &WasteType::Metal, &200, &200000);
+    
+    let mut material = client.submit_material(&recycler, &WasteType::Metal, &10000);
+    material.verified = true;
+    
+    client.transfer_waste(&material.id, &recycler, &collector);
+    
+    let total = client.distribute_rewards(&material.id, &incentive.id, &manufacturer);
+    
+    // Total = 10kg * 200 = 2000
+    // Collector gets 10% = 200
+    // Owner gets 40% = 800
+    // Recycler gets remaining = 1000
+    assert_eq!(total, 2000);
+    
+    let collector_stats = client.get_participant_stats(&collector);
+    assert_eq!(collector_stats.total_earned, 200);
+    
+    let recycler_stats = client.get_participant_stats(&recycler);
+    assert_eq!(recycler_stats.total_earned, 800); // Owner share
+}
+
+#[test]
+fn test_distribute_rewards_multiple_collectors() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    client.__constructor(&admin, &token_address, &charity_address, &5, &50);
+    
+    let manufacturer = Address::generate(&env);
+    let recycler = Address::generate(&env);
+    let collector1 = Address::generate(&env);
+    let collector2 = Address::generate(&env);
+    
+    let name1 = String::from_str(&env, "Manufacturer");
+    let name2 = String::from_str(&env, "Recycler");
+    let name3 = String::from_str(&env, "Collector 1");
+    let name4 = String::from_str(&env, "Collector 2");
+    
+    client.register_participant(&manufacturer, &Role::Manufacturer, &name1, &100, &200);
+    client.register_participant(&recycler, &Role::Recycler, &name2, &300, &400);
+    client.register_participant(&collector1, &Role::Collector, &name3, &500, &600);
+    client.register_participant(&collector2, &Role::Collector, &name4, &700, &800);
+    
+    let incentive = client.create_incentive(&manufacturer, &WasteType::Plastic, &50, &50000);
+    
+    let mut material = client.submit_material(&recycler, &WasteType::Plastic, &8000);
+    material.verified = true;
+    
+    // Transfer through two collectors
+    client.transfer_waste(&material.id, &recycler, &collector1);
+    client.transfer_waste(&material.id, &collector1, &collector2);
+    
+    let total = client.distribute_rewards(&material.id, &incentive.id, &manufacturer);
+    
+    // Total = 8kg * 50 = 400
+    // Each collector gets 5% = 20
+    // Owner gets 50% = 200
+    // Recycler gets remaining = 160
+    assert_eq!(total, 400);
+    
+    let collector1_stats = client.get_participant_stats(&collector1);
+    assert_eq!(collector1_stats.total_earned, 20);
+    
+    let collector2_stats = client.get_participant_stats(&collector2);
+    assert_eq!(collector2_stats.total_earned, 20);
+}
+
+#[test]
+#[should_panic(expected = "Material must be verified")]
+fn test_distribute_rewards_unverified() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    client.__constructor(&admin, &token_address, &charity_address, &5, &50);
+    
+    let manufacturer = Address::generate(&env);
+    let recycler = Address::generate(&env);
+    
+    let name1 = String::from_str(&env, "Manufacturer");
+    let name2 = String::from_str(&env, "Recycler");
+    
+    client.register_participant(&manufacturer, &Role::Manufacturer, &name1, &100, &200);
+    client.register_participant(&recycler, &Role::Recycler, &name2, &300, &400);
+    
+    let incentive = client.create_incentive(&manufacturer, &WasteType::Paper, &30, &30000);
+    let material = client.submit_material(&recycler, &WasteType::Paper, &4000);
+    
+    // Try to distribute without verification - should fail
+    client.distribute_rewards(&material.id, &incentive.id, &manufacturer);
+}
+
+#[test]
+#[should_panic(expected = "Waste type mismatch")]
+fn test_distribute_rewards_wrong_waste_type() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    client.__constructor(&admin, &token_address, &charity_address, &5, &50);
+    
+    let manufacturer = Address::generate(&env);
+    let recycler = Address::generate(&env);
+    
+    let name1 = String::from_str(&env, "Manufacturer");
+    let name2 = String::from_str(&env, "Recycler");
+    
+    client.register_participant(&manufacturer, &Role::Manufacturer, &name1, &100, &200);
+    client.register_participant(&recycler, &Role::Recycler, &name2, &300, &400);
+    
+    let incentive = client.create_incentive(&manufacturer, &WasteType::Metal, &100, &100000);
+    let mut material = client.submit_material(&recycler, &WasteType::Glass, &5000);
+    material.verified = true;
+    
+    // Try to distribute with wrong waste type - should fail
+    client.distribute_rewards(&material.id, &incentive.id, &manufacturer);
+}
+
+#[test]
+fn test_participant_stats_tracking() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    client.__constructor(&admin, &token_address, &charity_address, &5, &50);
+    
+    let recycler = Address::generate(&env);
+    let name = String::from_str(&env, "Recycler");
+    
+    client.register_participant(&recycler, &Role::Recycler, &name, &100, &200);
+    
+    let stats = client.get_participant_stats(&recycler);
+    assert_eq!(stats.total_earned, 0);
+    assert_eq!(stats.materials_submitted, 0);
+    assert_eq!(stats.transfers_count, 0);
+}
+
+#[test]
+fn test_recycler_gets_remaining_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    client.__constructor(&admin, &token_address, &charity_address, &5, &50);
+    
+    let manufacturer = Address::generate(&env);
+    let recycler = Address::generate(&env);
+    
+    let name1 = String::from_str(&env, "Manufacturer");
+    let name2 = String::from_str(&env, "Recycler");
+    
+    client.register_participant(&manufacturer, &Role::Manufacturer, &name1, &100, &200);
+    client.register_participant(&recycler, &Role::Recycler, &name2, &300, &400);
+    
+    let incentive = client.create_incentive(&manufacturer, &WasteType::Paper, &100, &100000);
+    let mut material = client.submit_material(&recycler, &WasteType::Paper, &10000);
+    material.verified = true;
+    
+    let total = client.distribute_rewards(&material.id, &incentive.id, &manufacturer);
+    
+    // Total = 10kg * 100 = 1000
+    // No collectors, so:
+    // Owner gets 50% = 500
+    // Recycler gets remaining = 500
+    assert_eq!(total, 1000);
+    
+    let recycler_stats = client.get_participant_stats(&recycler);
+    // Recycler is both owner and final holder, gets owner share (500) + remaining (500) = 1000
+    assert_eq!(recycler_stats.total_earned, 1000);
+}

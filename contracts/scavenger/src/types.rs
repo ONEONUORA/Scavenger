@@ -83,3 +83,101 @@ impl Incentive {
         }
     }
 }
+
+/// Waste material submission
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Material {
+    /// Unique identifier for the material
+    pub id: u64,
+    /// Type of waste material
+    pub waste_type: WasteType,
+    /// Weight of the material in grams
+    pub weight: u64,
+    /// Address of the participant who submitted the material
+    pub submitter: Address,
+    /// Current owner of the material
+    pub current_owner: Address,
+    /// Timestamp when the material was submitted
+    pub submitted_at: u64,
+    /// Whether the material has been verified
+    pub verified: bool,
+}
+
+impl Material {
+    /// Creates a new Material instance
+    pub fn new(
+        id: u64,
+        waste_type: WasteType,
+        weight: u64,
+        submitter: Address,
+        submitted_at: u64,
+    ) -> Self {
+        Self {
+            id,
+            waste_type,
+            weight,
+            submitter: submitter.clone(),
+            current_owner: submitter,
+            submitted_at,
+            verified: false,
+        }
+    }
+}
+
+/// Waste transfer record
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WasteTransfer {
+    /// ID of the waste being transferred
+    pub waste_id: u64,
+    /// Address of the sender
+    pub from: Address,
+    /// Address of the receiver
+    pub to: Address,
+    /// Timestamp of the transfer
+    pub transferred_at: u64,
+}
+
+impl WasteTransfer {
+    /// Creates a new WasteTransfer instance
+    pub fn new(
+        waste_id: u64,
+        from: Address,
+        to: Address,
+        transferred_at: u64,
+    ) -> Self {
+        Self {
+            waste_id,
+            from,
+            to,
+            transferred_at,
+        }
+    }
+}
+
+/// Participant statistics
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticipantStats {
+    /// Participant address
+    pub address: Address,
+    /// Total tokens earned
+    pub total_earned: i128,
+    /// Number of materials submitted
+    pub materials_submitted: u64,
+    /// Number of transfers participated in
+    pub transfers_count: u64,
+}
+
+impl ParticipantStats {
+    /// Creates a new ParticipantStats instance
+    pub fn new(address: Address) -> Self {
+        Self {
+            address,
+            total_earned: 0,
+            materials_submitted: 0,
+            transfers_count: 0,
+        }
+    }
+}

@@ -1,8 +1,8 @@
-use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
 
 use crate::events;
 use crate::storage::Storage;
-use crate::types::{Incentive, Participant, Role, WasteType};
+use crate::types::{Incentive, Material, Participant, Role, WasteTransfer, WasteType};
 
 #[contract]
 pub struct ScavengerContract;
@@ -242,6 +242,191 @@ impl ScavengerContract {
     /// Get all incentive IDs for a specific waste type
     pub fn get_incentives_by_waste_type(env: &Env, waste_type: WasteType) -> Vec<u64> {
         Storage::get_incentives_by_waste_type(env, waste_type)
+    }
+
+    /// Submit material for recycling
+    pub fn submit_material(
+        env: &Env,
+        submitter: Address,
+        waste_type: WasteType,
+        weight: u64,
+    ) -> Material {
+        submitter.require_auth();
+
+        assert!(
+            Storage::is_participant_registered(env, &submitter),
+            "Submitter not registered"
+        );
+
+        let material_id = Storage::next_material_id(env);
+        let material = Material::new(
+            material_id,
+            waste_type,
+            weight,
+            submitter,
+            env.ledger().timestamp(),
+        );
+
+        Storage::set_material(env, material_id, &material);
+        material
+    }
+
+    /// Transfer waste to another participant
+    pub fn transfer_waste(
+        env: &Env,
+        waste_id: u64,
+        from: Address,
+        to: Address,
+    ) {
+        from.require_auth();
+
+        assert!(
+            Storage::is_participant_registered(env, &from),
+            "Sender not registered"
+        );
+        assert!(
+            Storage::is_participant_registered(env, &to),
+            "Receiver not registered"
+        );
+
+        let mut material = Storage::get_material(env, waste_id)
+            .expect("Material not found");
+
+        assert!(
+            material.current_owner == from,
+            "Only current owner can transfer"
+        );
+
+        // Update material owner
+        material.current_owner = to.clone();
+        Storage::set_material(env, waste_id, &material);
+
+        // Record transfer
+        let transfer = WasteTransfer::new(
+            waste_id,
+            from,
+            to,
+            env.ledger().timestamp(),
+        );
+        Storage::add_transfer(env, waste_id, &transfer);
+    }
+
+    /// Get transfer history for a waste item
+    pub fn get_transfer_history(env: &Env, waste_id: u64) -> Vec<WasteTransfer> {
+        Storage::get_transfer_history(env, waste_id)
+    }
+
+    /// Distribute token rewards through the supply chain
+    pub fn distribute_rewards(
+        env: &Env,
+        waste_id: u64,
+        incentive_id: u64,
+        manufacturer: Address,
+    ) -> i128 {
+        manufacturer.require_auth();
+
+        // Get waste material
+        let material = Storage::get_material(env, waste_id)
+            .expect("Material not found");
+
+        assert!(material.verified, "Material must be verified");
+
+        // Get manufacturer incentive
+        let incentive = Storage::get_incentive(env, incentive_id)
+            .expect("Incentive not found");
+
+        assert!(
+            incentive.rewarder == manufacturer,
+            "Only incentive creator can distribute rewards"
+        );
+
+        assert!(
+            incentive.waste_type == material.waste_type,
+            "Waste type mismatch"
+        );
+
+        assert!(incentive.active, "Incentive not active");
+
+        // Calculate total reward (incentive * weight in kg)
+        let weight_kg = material.weight / 1000;
+        let total_reward = (incentive.reward_points as i128) * (weight_kg as i128);
+
+        assert!(
+            (total_reward as u64) <= incentive.remaining_budget,
+            "Insufficient incentive budget"
+        );
+
+        // Get waste transfer history
+        let transfers = Storage::get_transfer_history(env, waste_id);
+
+        // Get configuration
+        let collector_pct = Storage::get_collector_percentage(env)
+            .expect("Collector percentage not set");
+        let owner_pct = Storage::get_owner_percentage(env)
+            .expect("Owner percentage not set");
+
+        let token_address = Storage::get_token_address(env)
+            .expect("Token address not set");
+        let token_client = token::Client::new(env, &token_address);
+
+        // Calculate collector shares (5% each from total)
+        let collector_share = (total_reward * (collector_pct as i128)) / 100;
+        
+        // Calculate owner shares (50% of total)
+        let owner_share = (total_reward * (owner_pct as i128)) / 100;
+
+        let mut total_distributed: i128 = 0;
+
+        // Iterate through transfer history and reward collectors
+        for transfer in transfers.iter() {
+            let participant = Storage::get_participant(env, &transfer.to);
+            if let Some(p) = participant {
+                if matches!(p.role, Role::Collector) {
+                    // Transfer tokens to collector
+                    token_client.transfer(&manufacturer, &transfer.to, &collector_share);
+                    
+                    // Update participant statistics
+                    Storage::add_earnings(env, &transfer.to, collector_share);
+                    
+                    // Emit TokensRewarded event
+                    events::emit_tokens_rewarded(env, waste_id, &transfer.to, collector_share);
+                    
+                    total_distributed += collector_share;
+                }
+            }
+        }
+
+        // Reward the original owner (submitter) with their share
+        token_client.transfer(&manufacturer, &material.submitter, &owner_share);
+        Storage::add_earnings(env, &material.submitter, owner_share);
+        events::emit_tokens_rewarded(env, waste_id, &material.submitter, owner_share);
+        total_distributed += owner_share;
+
+        // Recycler gets remaining amount
+        let recycler_amount = total_reward - total_distributed;
+        if recycler_amount > 0 {
+            token_client.transfer(&manufacturer, &material.current_owner, &recycler_amount);
+            Storage::add_earnings(env, &material.current_owner, recycler_amount);
+            events::emit_tokens_rewarded(env, waste_id, &material.current_owner, recycler_amount);
+        }
+
+        // Update incentive budget
+        let mut updated_incentive = incentive;
+        updated_incentive.remaining_budget -= total_reward as u64;
+        if updated_incentive.remaining_budget == 0 {
+            updated_incentive.active = false;
+        }
+        Storage::set_incentive(env, incentive_id, &updated_incentive);
+
+        // Update total earned
+        Storage::add_to_total_earned(env, total_reward);
+
+        total_reward
+    }
+
+    /// Get participant statistics
+    pub fn get_participant_stats(env: &Env, address: Address) -> crate::types::ParticipantStats {
+        Storage::get_stats(env, &address)
     }
 
     // Private helper function to require admin authentication

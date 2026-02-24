@@ -1,6 +1,6 @@
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
-use crate::types::{Incentive, Participant, WasteType};
+use crate::types::{Incentive, Material, Participant, ParticipantStats, WasteTransfer, WasteType};
 
 // Storage keys
 const ADMIN: Symbol = symbol_short!("ADMIN");
@@ -141,5 +141,54 @@ impl Storage {
     pub fn get_incentives_by_waste_type(env: &Env, waste_type: WasteType) -> Vec<u64> {
         let key = (symbol_short!("GEN_INC"), waste_type);
         env.storage().instance().get(&key).unwrap_or(Vec::new(env))
+    }
+
+    // Material storage functions
+    pub fn next_material_id(env: &Env) -> u64 {
+        let key = symbol_short!("MAT_CNT");
+        let current: u64 = env.storage().instance().get(&key).unwrap_or(0);
+        let next = current + 1;
+        env.storage().instance().set(&key, &next);
+        next
+    }
+
+    pub fn set_material(env: &Env, material_id: u64, material: &Material) {
+        let key = (symbol_short!("MAT"), material_id);
+        env.storage().instance().set(&key, material);
+    }
+
+    pub fn get_material(env: &Env, material_id: u64) -> Option<Material> {
+        let key = (symbol_short!("MAT"), material_id);
+        env.storage().instance().get(&key)
+    }
+
+    // Waste transfer history functions
+    pub fn add_transfer(env: &Env, waste_id: u64, transfer: &WasteTransfer) {
+        let key = (symbol_short!("TRANS"), waste_id);
+        let mut transfers: Vec<WasteTransfer> = env.storage().instance().get(&key).unwrap_or(Vec::new(env));
+        transfers.push_back(transfer.clone());
+        env.storage().instance().set(&key, &transfers);
+    }
+
+    pub fn get_transfer_history(env: &Env, waste_id: u64) -> Vec<WasteTransfer> {
+        let key = (symbol_short!("TRANS"), waste_id);
+        env.storage().instance().get(&key).unwrap_or(Vec::new(env))
+    }
+
+    // Participant statistics functions
+    pub fn get_stats(env: &Env, address: &Address) -> ParticipantStats {
+        let key = (symbol_short!("STATS"), address);
+        env.storage().instance().get(&key).unwrap_or_else(|| ParticipantStats::new(address.clone()))
+    }
+
+    pub fn set_stats(env: &Env, address: &Address, stats: &ParticipantStats) {
+        let key = (symbol_short!("STATS"), address);
+        env.storage().instance().set(&key, stats);
+    }
+
+    pub fn add_earnings(env: &Env, address: &Address, amount: i128) {
+        let mut stats = Self::get_stats(env, address);
+        stats.total_earned += amount;
+        Self::set_stats(env, address, &stats);
     }
 }
