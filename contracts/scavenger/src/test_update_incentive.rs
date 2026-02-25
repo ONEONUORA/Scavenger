@@ -6,14 +6,14 @@ use crate::contract::ScavengerContract;
 use crate::types::{Role, WasteType};
 
 fn create_test_contract(env: &Env) -> (crate::contract::ScavengerContractClient<'_>, Address, Address, Address) {
-    let contract_id = env.register_contract(None, ScavengerContract);
+    let contract_id = env.register(ScavengerContract, ());
     let client = crate::contract::ScavengerContractClient::new(env, &contract_id);
     
     let admin = Address::generate(env);
-    let token_address = Address::generate(env);
+    let token_address = env.register_stellar_asset_contract(admin.clone());
     let charity_address = Address::generate(env);
     
-    client.__constructor(&admin, &token_address, &charity_address, &5, &50);
+    client.initialize(&admin, &token_address, &charity_address, &5, &50);
     
     (client, admin, token_address, charity_address)
 }
@@ -105,8 +105,8 @@ fn test_update_incentive_inactive() {
         &5000,
     );
     
-    // Manually deactivate by setting budget to 0
-    client.update_incentive(&incentive.id, &100, &0);
+    // Deactivate the incentive
+    client.deactivate_incentive(&manufacturer, &incentive.id);
     
     // Try to update inactive incentive
     client.update_incentive(&incentive.id, &200, &10000);

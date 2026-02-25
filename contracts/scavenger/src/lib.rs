@@ -6,6 +6,7 @@ mod test;
 mod test_update_incentive;
 mod test_deactivate_waste;
 mod test_reset_waste_confirmation;
+mod testutils;
 mod events;
 mod types;
 

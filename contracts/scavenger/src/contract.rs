@@ -10,7 +10,7 @@ pub struct ScavengerContract;
 #[contractimpl]
 impl ScavengerContract {
     /// Initialize the contract with admin and configuration
-    pub fn __constructor(
+    pub fn initialize(
         env: &Env,
         admin: Address,
         token_address: Address,
@@ -262,7 +262,7 @@ impl ScavengerContract {
 
     /// Get the active incentive with the highest reward for a specific manufacturer and waste type
     /// Returns None if no active incentive is found
-    pub fn get_active_incentive_for_manufacturer(
+    pub fn get_active_incentive(
         env: &Env,
         manufacturer: Address,
         waste_type: WasteType,
@@ -341,6 +341,16 @@ impl ScavengerContract {
         );
 
         incentive
+    }
+
+    /// Deactivate an incentive (rewarder only)
+    pub fn deactivate_incentive(env: &Env, rewarder: Address, incentive_id: u64) {
+        rewarder.require_auth();
+        let mut incentive = Storage::get_incentive(env, incentive_id)
+            .expect("Incentive not found");
+        assert!(incentive.rewarder == rewarder, "Only rewarder can deactivate");
+        incentive.active = false;
+        Storage::set_incentive(env, incentive_id, &incentive);
     }
 
     /// Submit material for recycling
@@ -522,7 +532,7 @@ impl ScavengerContract {
         let material = Storage::get_material(env, waste_id)
             .expect("Material not found");
 
-        assert!(material.verified, "Material must be verified");
+        assert!(material.is_confirmed, "Material must be confirmed");
 
         // Get manufacturer incentive
         let incentive = Storage::get_incentive(env, incentive_id)
