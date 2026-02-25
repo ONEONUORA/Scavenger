@@ -1,106 +1,378 @@
-# Reset Waste Confirmation Implementation
+# Waste Confirmation Reset Implementation
 
 ## Overview
-Implemented a function that allows waste owners to reset the confirmation status of their waste items, enabling re-confirmation if needed.
+Implemented the waste confirmation reset feature that allows waste owners to reset the confirmation status of their waste materials. This enables a flexible workflow where waste can be confirmed, reset, and re-confirmed as needed throughout the supply chain process.
 
-## Changes Made
+## Implementation Details
 
-### 1. Added `reset_confirmation()` Method to Waste Struct
-**File**: `stellar-contract/src/types.rs`
+### Structural Changes
 
-Added a new method to the `Waste` implementation:
+#### 1. Material Struct Update
+Added confirmation-related fields to the Material struct:
+
 ```rust
-pub fn reset_confirmation(&mut self) {
-    self.is_confirmed = false;
-    self.confirmer = self.current_owner.clone();
+pub struct Material {
+    pub id: u64,
+    pub waste_type: WasteType,
+    pub weight: u64,
+    pub submitter: Address,
+    pub current_owner: Address,
+    pub submitted_at: u64,
+    pub verified: bool,
+    pub is_active: bool,
+    pub is_confirmed: bool,  // NEW FIELD
+    pub confirmer: Address,  // NEW FIELD
 }
 ```
 
-This method:
-- Sets `is_confirmed` to `false`
-- Resets the `confirmer` address back to the current owner
+- `is_confirmed`: Boolean flag indicating confirmation status
+- `confirmer`: Address of the participant who confirmed the waste
+- New materials start with `is_confirmed: false`
+- `confirmer` defaults to submitter address
 
-### 2. Added `reset_waste_confirmation()` Contract Function
-**File**: `stellar-contract/src/lib.rs`
+#### 2. New Functions
 
-Implemented the public contract function:
+**confirm_waste (Public Function)**
 ```rust
-pub fn reset_waste_confirmation(
-    env: Env,
-    waste_id: u128,
-    owner: Address,
-) -> types::Waste
+pub fn confirm_waste(env: &Env, waste_id: u64, confirmer: Address)
+```
+- Allows registered participants to confirm waste
+- Sets `is_confirmed` to true
+- Records confirmer address
+- Emits confirmation event
+
+**reset_waste_confirmation (Owner Function)**
+```rust
+pub fn reset_waste_confirmation(env: &Env, waste_id: u64, owner: Address)
+```
+- Allows waste owner to reset confirmation
+- Sets `is_confirmed` to false
+- Resets confirmer to submitter address
+- Emits reset event
+
+### Core Features
+
+1. **Owner-Only Reset**
+   - Only current owner can reset confirmation
+   - Authentication enforced via `require_auth()`
+   - Error: "Only waste owner can reset confirmation"
+
+2. **Confirmation Status Management**
+   - Clear boolean flag for confirmation state
+   - Tracks who confirmed the waste
+   - Allows multiple confirmation cycles
+
+3. **Re-confirmation Support**
+   - After reset, waste can be confirmed again
+   - Different participants can confirm after reset
+   - Supports flexible workflow patterns
+
+4. **Active Waste Check**
+   - Only active waste can be confirmed/reset
+   - Deactivated waste cannot be modified
+   - Maintains data integrity
+
+5. **Event Emission**
+   - `WASTE_CONFIRMED` event on confirmation
+   - `WASTE_CONFIRMATION_RESET` event on reset
+   - Complete audit trail
+
+### Files Modified
+
+1. **contracts/scavenger/src/types.rs**
+   - Added `is_confirmed: bool` field to Material struct
+   - Added `confirmer: Address` field to Material struct
+   - Updated Material::new() to initialize new fields
+
+2. **contracts/scavenger/src/contract.rs**
+   - Added `confirm_waste` function
+   - Added `reset_waste_confirmation` function
+
+3. **contracts/scavenger/src/events.rs**
+   - Added `WASTE_CONFIRMED` constant
+   - Added `WASTE_CONFIRMATION_RESET` constant
+   - Added `emit_waste_confirmed` function
+   - Added `emit_waste_confirmation_reset` function
+
+4. **contracts/scavenger/src/lib.rs**
+   - Added `test_reset_waste_confirmation` module
+
+5. **contracts/scavenger/src/test_reset_waste_confirmation.rs** (New File)
+   - Comprehensive test suite with 11 test cases
+
+## Test Coverage
+
+### Test Cases Implemented
+
+1. **test_reset_waste_confirmation_success**
+   - Verifies successful reset by owner
+   - Confirms status changes and confirmer is cleared
+
+2. **test_reset_waste_confirmation_non_owner**
+   - Ensures only owner can reset
+   - Validates ownership enforcement
+
+3. **test_reset_waste_confirmation_not_found**
+   - Tests error handling for non-existent waste
+
+4. **test_reset_waste_confirmation_inactive**
+   - Prevents reset on deactivated waste
+
+5. **test_reset_allows_reconfirmation**
+   - Confirms waste can be re-confirmed after reset
+   - Tests with different confirmers
+
+6. **test_reset_multiple_times**
+   - Verifies multiple reset cycles work correctly
+
+7. **test_new_material_not_confirmed**
+   - Confirms new materials start unconfirmed
+
+8. **test_confirm_waste_success**
+   - Tests basic confirmation functionality
+
+9. **test_confirm_waste_unregistered_confirmer**
+   - Validates confirmer must be registered
+
+10. **test_reset_after_transfer**
+    - Verifies new owner can reset after transfer
+
+## Acceptance Criteria Status
+
+✅ **Only owner can reset**
+- Implemented via ownership check: `material.current_owner == owner`
+- Authentication enforced via `owner.require_auth()`
+- Non-owner attempts result in error
+
+✅ **Confirmation status clears**
+- `is_confirmed` set to false
+- `confirmer` reset to submitter address
+- State properly cleared for re-confirmation
+
+✅ **Can be re-confirmed**
+- No restrictions on re-confirmation after reset
+- Different participants can confirm
+- Multiple reset/confirm cycles supported
+
+## Event Tracking
+
+New event types for monitoring confirmation workflow:
+
+```rust
+const WASTE_CONFIRMED: Symbol = symbol_short!("wst_conf");
+const WASTE_CONFIRMATION_RESET: Symbol = symbol_short!("wst_rst");
 ```
 
-**Features**:
-- Requires authentication from the owner
-- Validates that the caller is the current owner
-- Checks that the waste is currently confirmed
-- Resets the confirmation status
-- Emits a "reset" event with waste_id, owner, and timestamp
-- Returns the updated waste object
+### WASTE_CONFIRMED Event
+- `waste_id`: ID of the confirmed waste
+- `confirmer`: Address of the confirmer
 
-**Error Handling**:
-- Panics with "Waste not found" if waste_id doesn't exist
-- Panics with "Only owner can reset confirmation" if caller is not the owner
-- Panics with "Waste is not confirmed" if waste is not currently confirmed
-
-### 3. Comprehensive Test Suite
-**File**: `stellar-contract/tests/reset_waste_confirmation_test.rs`
-
-Created four test cases:
-
-1. **test_reset_waste_confirmation**: Happy path test
-   - Registers waste
-   - Confirms it
-   - Resets confirmation
-   - Verifies waste can be re-confirmed
-
-2. **test_reset_waste_confirmation_non_owner**: Authorization test
-   - Verifies only the owner can reset
-   - Should panic with "Only owner can reset confirmation"
-
-3. **test_reset_unconfirmed_waste**: State validation test
-   - Attempts to reset unconfirmed waste
-   - Should panic with "Waste is not confirmed"
-
-4. **test_reset_nonexistent_waste**: Existence validation test
-   - Attempts to reset non-existent waste
-   - Should panic with "Waste not found"
-
-## Acceptance Criteria Met
-
-✅ **Only owner can reset**: Function checks `waste.current_owner != owner` and panics if not the owner
-
-✅ **Confirmation status clears**: Sets `is_confirmed = false` and resets confirmer to owner
-
-✅ **Can be re-confirmed**: Test verifies waste can be confirmed again after reset
-
-✅ **Event emitted**: Publishes "reset" event with waste_id, owner, and timestamp
+### WASTE_CONFIRMATION_RESET Event
+- `waste_id`: ID of the waste
+- `owner`: Address of the owner who reset
 
 ## Usage Example
 
 ```rust
-// Register waste
-let waste = client.register_waste(&owner, &WasteType::Plastic, &1000, &45_000_000, &-93_000_000);
+// Submit a waste material
+let material = client.submit_material(
+    &owner,
+    &WasteType::Paper,
+    &5000,
+);
 
-// Confirm waste
-client.confirm_waste_details(&waste.waste_id, &confirmer);
+// Material is not confirmed initially
+assert_eq!(material.is_confirmed, false);
 
-// Reset confirmation (only owner can do this)
-client.reset_waste_confirmation(&waste.waste_id, &owner);
+// Confirm the waste
+client.confirm_waste(&material.id, &confirmer);
 
-// Re-confirm if needed
-client.confirm_waste_details(&waste.waste_id, &confirmer);
+// Verify confirmation
+let confirmed = client.get_material(&material.id).unwrap();
+assert_eq!(confirmed.is_confirmed, true);
+assert_eq!(confirmed.confirmer, confirmer);
+
+// Owner resets confirmation
+client.reset_waste_confirmation(&material.id, &owner);
+
+// Verify reset
+let reset = client.get_material(&material.id).unwrap();
+assert_eq!(reset.is_confirmed, false);
+
+// Can be re-confirmed
+client.confirm_waste(&material.id, &another_confirmer);
 ```
 
 ## Security Considerations
 
-1. **Authentication**: Uses `owner.require_auth()` to ensure only authorized calls
-2. **Ownership validation**: Explicitly checks caller is the current owner
-3. **State validation**: Ensures waste is confirmed before allowing reset
-4. **Event logging**: Emits event for audit trail
+1. **Authorization**: Only waste owner can reset
+2. **Registration**: Confirmers must be registered participants
+3. **Active Status**: Only active waste can be confirmed/reset
+4. **Audit Trail**: Events provide complete history
+5. **State Integrity**: Proper state transitions enforced
 
-## Testing
+## Use Cases
 
-All tests pass with no compilation errors or warnings. The implementation is ready for integration.
+### Valid Scenarios for Reset
+
+1. **Incorrect Confirmation**
+   - Wrong participant confirmed the waste
+   - Need to re-confirm with correct participant
+
+2. **Quality Issues**
+   - Waste needs re-inspection
+   - Confirmation was premature
+
+3. **Process Changes**
+   - Workflow requirements changed
+   - Need different confirmation authority
+
+4. **Transfer Scenarios**
+   - New owner wants fresh confirmation
+   - Reset before transfer to new stage
+
+## Workflow Patterns
+
+### Basic Confirmation Flow
+```
+Submit → Confirm → Process
+```
+
+### Reset and Re-confirm Flow
+```
+Submit → Confirm → Reset → Re-confirm → Process
+```
+
+### Multiple Confirmation Cycles
+```
+Submit → Confirm → Reset → Confirm → Reset → Confirm → Process
+```
+
+### Transfer with Reset
+```
+Submit → Confirm → Transfer → Reset → Re-confirm → Process
+```
+
+## Integration Notes
+
+### Breaking Changes
+⚠️ **Material struct has changed** - Added confirmation fields
+- Requires contract redeployment
+- Existing data may need migration
+- All Material instances now include confirmation fields
+
+### Backward Compatibility
+- New fields added to Material struct
+- Existing code needs to handle new fields
+- Default values set for new materials
+
+### Migration Strategy
+For existing deployments:
+1. Deploy updated contract
+2. Set `is_confirmed: false` for all existing materials
+3. Set `confirmer` to submitter for all existing materials
+4. Update client code to use new Material structure
+5. Test confirmation workflow thoroughly
+
+## API Reference
+
+### confirm_waste
+```rust
+pub fn confirm_waste(env: &Env, waste_id: u64, confirmer: Address)
+```
+
+**Parameters:**
+- `waste_id`: ID of the waste to confirm
+- `confirmer`: Address of the confirmer (must be registered)
+
+**Errors:**
+- "Waste not found" - Invalid waste ID
+- "Waste is not active" - Waste has been deactivated
+- "Confirmer not registered" - Confirmer is not a registered participant
+
+**Events:**
+- Emits `WASTE_CONFIRMED` with waste_id and confirmer address
+
+### reset_waste_confirmation
+```rust
+pub fn reset_waste_confirmation(env: &Env, waste_id: u64, owner: Address)
+```
+
+**Parameters:**
+- `waste_id`: ID of the waste to reset
+- `owner`: Address of the waste owner (must be current owner)
+
+**Errors:**
+- "Waste not found" - Invalid waste ID
+- "Only waste owner can reset confirmation" - Caller is not owner
+- "Waste is not active" - Waste has been deactivated
+
+**Events:**
+- Emits `WASTE_CONFIRMATION_RESET` with waste_id and owner address
+
+## Best Practices
+
+1. **Confirm Before Processing**
+   - Always confirm waste before critical operations
+   - Use confirmation as quality gate
+
+2. **Track Confirmation History**
+   - Monitor confirmation events
+   - Maintain audit log of confirmations
+
+3. **Reset Sparingly**
+   - Use reset for legitimate reasons
+   - Document reason for reset
+
+4. **Verify Confirmer**
+   - Ensure confirmer has appropriate role
+   - Check confirmer credentials
+
+## Performance Considerations
+
+- Confirmation: O(1) operation
+- Reset: O(1) operation
+- No impact on other contract operations
+- Event emission is lightweight
+
+## Future Enhancements
+
+Potential improvements:
+1. Confirmation reason field
+2. Multiple confirmers support
+3. Confirmation expiry/timeout
+4. Confirmation levels/stages
+5. Confirmation requirements by waste type
+6. Confirmation history tracking
+
+## Troubleshooting
+
+### "Only waste owner can reset confirmation"
+- Verify caller is current owner
+- Check if waste was transferred
+- Ensure proper authentication
+
+### "Waste not found"
+- Verify waste ID exists
+- Check if waste was deactivated
+- Confirm waste was properly submitted
+
+### "Waste is not active"
+- Waste has been deactivated
+- Cannot confirm or reset inactive waste
+- Check deactivation history
+
+### "Confirmer not registered"
+- Confirmer must be registered participant
+- Register confirmer before confirmation
+- Check participant registration status
+
+## Next Steps
+
+To use this feature:
+1. Build the contract with updated Material struct
+2. Deploy the updated contract (note: breaking change)
+3. Migrate existing data if necessary
+4. Participants can call `confirm_waste` to confirm
+5. Owners can call `reset_waste_confirmation` to reset
+6. Monitor events for tracking confirmation workflow

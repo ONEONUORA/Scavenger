@@ -406,6 +406,64 @@ impl ScavengerContract {
         events::emit_waste_deactivated(env, waste_id, &admin);
     }
 
+    /// Confirm a waste material
+    pub fn confirm_waste(env: &Env, waste_id: u64, confirmer: Address) {
+        confirmer.require_auth();
+
+        // Get the material
+        let mut material = Storage::get_material(env, waste_id)
+            .expect("Waste not found");
+
+        // Check if material is active
+        assert!(material.is_active, "Waste is not active");
+
+        // Check confirmer is registered
+        assert!(
+            Storage::is_participant_registered(env, &confirmer),
+            "Confirmer not registered"
+        );
+
+        // Update confirmation status
+        material.is_confirmed = true;
+        material.confirmer = confirmer.clone();
+
+        // Store the updated material
+        Storage::set_material(env, waste_id, &material);
+
+        // Emit confirmation event
+        events::emit_waste_confirmed(env, waste_id, &confirmer);
+    }
+
+    /// Reset waste confirmation status (owner only)
+    /// Allows the waste owner to reset confirmation so it can be re-confirmed
+    pub fn reset_waste_confirmation(env: &Env, waste_id: u64, owner: Address) {
+        owner.require_auth();
+
+        // Get the material
+        let mut material = Storage::get_material(env, waste_id)
+            .expect("Waste not found");
+
+        // Check caller is the current owner
+        assert!(
+            material.current_owner == owner,
+            "Only waste owner can reset confirmation"
+        );
+
+        // Check if material is active
+        assert!(material.is_active, "Waste is not active");
+
+        // Reset confirmation status
+        material.is_confirmed = false;
+        // Clear confirmer address (reset to submitter as default)
+        material.confirmer = material.submitter.clone();
+
+        // Store the updated material
+        Storage::set_material(env, waste_id, &material);
+
+        // Emit reset event
+        events::emit_waste_confirmation_reset(env, waste_id, &owner);
+    }
+
     /// Transfer waste to another participant
     pub fn transfer_waste(
         env: &Env,

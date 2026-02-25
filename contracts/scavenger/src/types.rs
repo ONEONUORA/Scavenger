@@ -104,6 +104,10 @@ pub struct Material {
     pub verified: bool,
     /// Whether the material is active (can be deactivated by admin)
     pub is_active: bool,
+    /// Whether the material has been confirmed
+    pub is_confirmed: bool,
+    /// Address of the confirmer (if confirmed)
+    pub confirmer: Address,
 }
 
 impl Material {
@@ -120,10 +124,12 @@ impl Material {
             waste_type,
             weight,
             submitter: submitter.clone(),
-            current_owner: submitter,
+            current_owner: submitter.clone(),
             submitted_at,
             verified: false,
             is_active: true,
+            is_confirmed: false,
+            confirmer: submitter, // Default to submitter, will be updated on confirmation
         }
     }
 }
