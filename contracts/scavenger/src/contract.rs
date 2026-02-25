@@ -371,6 +371,41 @@ impl ScavengerContract {
         material
     }
 
+    /// Get material/waste by ID (only returns active materials)
+    pub fn get_material(env: &Env, material_id: u64) -> Option<Material> {
+        let material = Storage::get_material(env, material_id)?;
+        
+        // Only return active materials
+        if material.is_active {
+            Some(material)
+        } else {
+            None
+        }
+    }
+
+    /// Deactivate a waste record (admin only)
+    /// Once deactivated, the waste cannot be queried or reactivated
+    pub fn deactivate_waste(env: &Env, admin: Address, waste_id: u64) {
+        // Require admin authentication
+        Self::require_admin(env, &admin);
+
+        // Get the material
+        let mut material = Storage::get_material(env, waste_id)
+            .expect("Waste not found");
+
+        // Check if already deactivated
+        assert!(material.is_active, "Waste already deactivated");
+
+        // Deactivate the material
+        material.is_active = false;
+
+        // Store the updated material
+        Storage::set_material(env, waste_id, &material);
+
+        // Emit deactivation event
+        events::emit_waste_deactivated(env, waste_id, &admin);
+    }
+
     /// Transfer waste to another participant
     pub fn transfer_waste(
         env: &Env,

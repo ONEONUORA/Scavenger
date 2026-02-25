@@ -102,6 +102,8 @@ pub struct Material {
     pub submitted_at: u64,
     /// Whether the material has been verified
     pub verified: bool,
+    /// Whether the material is active (can be deactivated by admin)
+    pub is_active: bool,
 }
 
 impl Material {
@@ -121,6 +123,7 @@ impl Material {
             current_owner: submitter,
             submitted_at,
             verified: false,
+            is_active: true,
         }
     }
 }
