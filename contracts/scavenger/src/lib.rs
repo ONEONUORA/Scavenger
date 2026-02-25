@@ -7,6 +7,7 @@ mod test_update_incentive;
 mod test_deactivate_waste;
 mod test_reset_waste_confirmation;
 mod testutils;
+mod test_data_structures;
 mod events;
 mod types;
 
