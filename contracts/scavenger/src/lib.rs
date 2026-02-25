@@ -3,6 +3,7 @@
 mod contract;
 mod storage;
 mod test;
+mod test_update_incentive;
 mod events;
 mod types;
 

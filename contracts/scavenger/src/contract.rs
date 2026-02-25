@@ -290,6 +290,58 @@ impl ScavengerContract {
         best_incentive
     }
 
+    /// Update an existing incentive (owner only, active incentives only)
+    pub fn update_incentive(
+        env: &Env,
+        incentive_id: u64,
+        new_reward_points: u64,
+        new_total_budget: u64,
+    ) -> Incentive {
+        // Get the incentive
+        let mut incentive = Storage::get_incentive(env, incentive_id)
+            .expect("Incentive not found");
+
+        // Require authentication from the rewarder (owner)
+        incentive.rewarder.require_auth();
+
+        // Check incentive is active
+        assert!(incentive.active, "Incentive is not active");
+
+        // Validate new values
+        assert!(new_reward_points > 0, "Reward must be greater than zero");
+        assert!(new_total_budget > 0, "Total budget must be greater than zero");
+
+        // Calculate how much budget has been used
+        let budget_used = incentive.total_budget - incentive.remaining_budget;
+
+        // Update the incentive fields
+        incentive.reward_points = new_reward_points;
+        incentive.total_budget = new_total_budget;
+        
+        // Adjust remaining budget based on new total budget
+        // If new budget is greater than used budget, set remaining accordingly
+        // Otherwise, set remaining to 0 and deactivate
+        if new_total_budget > budget_used {
+            incentive.remaining_budget = new_total_budget - budget_used;
+        } else {
+            incentive.remaining_budget = 0;
+            incentive.active = false;
+        }
+
+        // Store the updated incentive
+        Storage::set_incentive(env, incentive_id, &incentive);
+
+        // Emit update event
+        events::emit_incentive_updated(
+            env,
+            incentive_id,
+            &incentive.rewarder,
+            new_reward_points,
+            new_total_budget,
+        );
+
+        incentive
+    }
 
     /// Submit material for recycling
     pub fn submit_material(
