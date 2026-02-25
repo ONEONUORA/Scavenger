@@ -4,6 +4,7 @@ use crate::types::WasteType;
 
 const WASTE_REGISTERED: Symbol = symbol_short!("recycled");
 const DONATION_MADE: Symbol = symbol_short!("donated");
+const WASTE_CONFIRMED: Symbol = symbol_short!("confirmed");
 
 /// Emit event when waste is registered
 pub fn emit_waste_registered(
@@ -31,5 +32,17 @@ pub fn emit_donation_made(
     env.events().publish(
         (DONATION_MADE, donor),
         (amount, charity_contract),
+    );
+}
+
+/// Emit event when waste is confirmed by a third party
+pub fn emit_waste_confirmed(
+    env: &Env,
+    waste_id: u128,
+    confirmer: &Address,
+) {
+    env.events().publish(
+        (WASTE_CONFIRMED, waste_id),
+        confirmer,
     );
 }

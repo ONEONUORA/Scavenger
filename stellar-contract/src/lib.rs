@@ -1165,10 +1165,7 @@ impl ScavengerContract {
         waste.confirm(confirmer.clone());
         env.storage().instance().set(&("waste_v2", waste_id), &waste);
 
-        env.events().publish(
-            (soroban_sdk::symbol_short!("confirmed"), waste_id),
-            (confirmer, env.ledger().timestamp()),
-        );
+        events::emit_waste_confirmed(&env, waste_id, &confirmer);
 
         waste
     }
