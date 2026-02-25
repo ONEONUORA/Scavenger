@@ -1155,4 +1155,103 @@ mod test {
         assert_eq!(waste_count, 3);
         assert_eq!(incentive_count, 3);
     }
+
+    // Edge Case Tests for Storage System
+
+    #[test]
+    fn test_non_existent_entity_retrieval_returns_none() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let non_existent_address = Address::generate(&env);
+
+        // Test non-existent participant returns None
+        let participant = client.get_participant(&non_existent_address);
+        assert!(participant.is_none());
+
+        // Test non-existent waste returns None
+        let waste = client.get_waste_by_id(&999);
+        assert!(waste.is_none());
+
+        // Test non-existent stats returns None
+        let stats = client.get_stats(&non_existent_address);
+        assert!(stats.is_none());
+    }
+
+    #[test]
+    fn test_counter_initialization() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        // Register participant
+        client.register_participant(&user, &ParticipantRole::Recycler);
+
+        // First waste should have ID 1 (counter starts at 0, increments to 1)
+        let desc = String::from_str(&env, "First waste");
+        let material = client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+        assert_eq!(material.id, 1);
+
+        // Second waste should have ID 2
+        let desc2 = String::from_str(&env, "Second waste");
+        let material2 = client.submit_material(&WasteType::Plastic, &2000, &user, &desc2);
+        assert_eq!(material2.id, 2);
+    }
+
+    #[test]
+    fn test_batch_retrieval_with_non_existent_ids() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        client.register_participant(&user, &ParticipantRole::Recycler);
+
+        // Submit one waste
+        let desc = String::from_str(&env, "Test waste");
+        client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+
+        // Batch retrieve with mix of existing and non-existent IDs
+        let mut ids = soroban_sdk::Vec::new(&env);
+        ids.push_back(1); // exists
+        ids.push_back(999); // doesn't exist
+        ids.push_back(2); // doesn't exist
+
+        let results = client.get_wastes_batch(&ids);
+        assert_eq!(results.len(), 3);
+        assert!(results.get(0).unwrap().is_some());
+        assert!(results.get(1).unwrap().is_none());
+        assert!(results.get(2).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_stats_initialization_for_new_participant() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+        env.mock_all_auths();
+
+        client.register_participant(&user, &ParticipantRole::Recycler);
+
+        // Stats should be None for newly registered participant
+        let stats = client.get_stats(&user);
+        assert!(stats.is_none());
+
+        // After submitting waste, stats should exist
+        let desc = String::from_str(&env, "First waste");
+        client.submit_material(&WasteType::Paper, &1000, &user, &desc);
+        
+        let stats = client.get_stats(&user);
+        assert!(stats.is_some());
+        let stats = stats.unwrap();
+        assert_eq!(stats.total_submissions, 1);
+    }
 }
