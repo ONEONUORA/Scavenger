@@ -957,6 +957,10 @@ impl ScavengerContract {
             panic!("Caller does not own waste");
         }
 
+        if !waste.is_active {
+            panic!("Cannot transfer deactivated waste");
+        }
+
         if !Self::is_valid_transfer(env.clone(), from.clone(), to.clone()) {
             panic!("Invalid transfer");
         }
@@ -1122,6 +1126,10 @@ impl ScavengerContract {
             .get(&("waste_v2", waste_id))
             .expect("Waste not found");
 
+        if !waste.is_active {
+            panic!("Cannot confirm deactivated waste");
+        }
+
         if waste.current_owner == confirmer {
             panic!("Owner cannot confirm own waste");
         }
@@ -1136,6 +1144,70 @@ impl ScavengerContract {
         env.events().publish(
             (soroban_sdk::symbol_short!("confirmed"), waste_id),
             (confirmer, env.ledger().timestamp()),
+        );
+
+        waste
+    }
+
+    /// Reset waste confirmation status
+    /// Only the waste owner can reset the confirmation
+    pub fn reset_waste_confirmation(
+        env: Env,
+        waste_id: u128,
+        owner: Address,
+    ) -> types::Waste {
+        owner.require_auth();
+
+        let mut waste: types::Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", waste_id))
+            .expect("Waste not found");
+
+        if waste.current_owner != owner {
+            panic!("Only owner can reset confirmation");
+        }
+
+        if !waste.is_confirmed {
+            panic!("Waste is not confirmed");
+        }
+
+        waste.reset_confirmation();
+        env.storage().instance().set(&("waste_v2", waste_id), &waste);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("reset"), waste_id),
+            (owner, env.ledger().timestamp()),
+        );
+
+        waste
+    }
+
+    /// Deactivate a waste record (admin only)
+    /// Deactivated waste cannot be queried or reactivated
+    pub fn deactivate_waste(
+        env: Env,
+        waste_id: u128,
+        admin: Address,
+    ) -> types::Waste {
+        Self::require_admin(&env, &admin);
+
+        let mut waste: types::Waste = env
+            .storage()
+            .instance()
+            .get(&("waste_v2", waste_id))
+            .expect("Waste not found");
+
+        if !waste.is_active {
+            panic!("Waste already deactivated");
+        }
+
+        waste.deactivate();
+        env.storage().instance().set(&("waste_v2", waste_id), &waste);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("deactive"), waste_id),
+            (admin, env.ledger().timestamp()),
         );
 
         waste

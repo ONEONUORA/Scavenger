@@ -569,6 +569,12 @@ impl Waste {
         self.confirmer = confirmer;
     }
 
+    /// Resets the confirmation status of the waste
+    pub fn reset_confirmation(&mut self) {
+        self.is_confirmed = false;
+        self.confirmer = self.current_owner.clone();
+    }
+
     /// Deactivates the waste
     pub fn deactivate(&mut self) {
         self.is_active = false;
