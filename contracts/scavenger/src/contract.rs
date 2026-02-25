@@ -162,14 +162,25 @@ impl ScavengerContract {
 
         let participant = Participant {
             address: address.clone(),
-            role,
-            name,
+            role: role.clone(),
+            name: name.clone(),
             latitude,
             longitude,
             registered_at: env.ledger().timestamp(),
         };
 
         Storage::set_participant(env, &address, &participant);
+        
+        // Emit participant registered event
+        events::emit_participant_registered(
+            env,
+            &address,
+            &role,
+            &name,
+            latitude,
+            longitude,
+        );
+
         participant
     }
 
